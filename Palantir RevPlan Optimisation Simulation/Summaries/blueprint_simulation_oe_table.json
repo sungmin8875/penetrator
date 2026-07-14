@@ -1,0 +1,564 @@
+{
+  "name": "Create Simulation OE Table",
+  "flow": [
+    {
+      "id": 1,
+      "module": "celonis:getProcessContext",
+      "version": 3,
+      "parameters": {
+        "__IMTCONN__": 68206
+      },
+      "mapper": {
+        "instanceid": "{{var.input.dpInstanceId}}",
+        "scenarioId": "{{var.scenario.id}}",
+        "executionId": "{{var.scenario.executionId}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 0,
+          "y": 0
+        },
+        "restore": {
+          "parameters": {
+            "__IMTCONN__": {
+              "data": {
+                "scoped": "true",
+                "connection": "celonis7"
+              },
+              "label": "OE connection"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "__IMTCONN__",
+            "type": "account:celonis7",
+            "label": "Connection",
+            "required": true
+          }
+        ],
+        "expect": [
+          {
+            "name": "instanceid",
+            "type": "text",
+            "label": "Digital Process Instance ID",
+            "required": true
+          },
+          {
+            "name": "executionId",
+            "type": "text",
+            "label": "Action Flow Execution ID",
+            "required": true
+          },
+          {
+            "name": "scenarioId",
+            "type": "text",
+            "label": "Action Flow ID",
+            "required": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "module": "celonis:writeToDataPool",
+      "version": 3,
+      "parameters": {
+        "__IMTCONN__": 68299
+      },
+      "mapper": {
+        "tableName": "SIMULATION_OE_Table",
+        "newColumns": [
+          {
+            "name": "simulation_id",
+            "value": "{{1.instanceId}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": true
+          },
+          {
+            "name": "execution_id",
+            "value": "{{1.executionId}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "scenario_name",
+            "value": "{{1.events.`start-simulation-oe`.scenario_name}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "start_month",
+            "value": "{{1.events.`start-simulation-oe`.start_month}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "weight_revenue",
+            "value": "{{1.events.`start-simulation-oe`.weight_revenue}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "weight_margin",
+            "value": "{{1.events.`start-simulation-oe`.weight_margin}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "weight_delivery",
+            "value": "{{1.events.`start-simulation-oe`.weight_delivery}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "prototype_pct",
+            "value": "{{1.events.`start-simulation-oe`.prototype_pct}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "max_delay_days",
+            "value": "{{1.events.`start-simulation-oe`.max_delay_days}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "created_by",
+            "value": "{{1.events.`start-simulation-oe`.email_address}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "status",
+            "value": "REQUESTED",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          },
+          {
+            "name": "created_at",
+            "value": "{{now}}",
+            "dataType": "STRING",
+            "defineAsPrimaryKey": false
+          }
+        ],
+        "chooseSource": "manualInput",
+        "connectionName": "OE",
+        "dataPoolMapping": "generateDynamically",
+        "dataPoolSelected": "48fcce75-0980-4297-8a27-6d52fb7f91eb",
+        "ingestionConnection": " New Connection"
+      },
+      "metadata": {
+        "designer": {
+          "x": 300,
+          "y": 0
+        },
+        "restore": {
+          "expect": {
+            "newColumns": {
+              "items": [
+                {
+                  "dataType": {
+                    "mode": "chose",
+                    "label": "String"
+                  },
+                  "defineAsPrimaryKey": {
+                    "mode": "chose"
+                  }
+                },
+                {
+                  "dataType": {
+                    "mode": "chose",
+                    "label": "String"
+                  },
+                  "defineAsPrimaryKey": {
+                    "mode": "chose"
+                  }
+                },
+                {
+                  "dataType": {
+                    "mode": "chose",
+                    "label": "String"
+                  },
+                  "defineAsPrimaryKey": {
+                    "mode": "chose"
+                  }
+                },
+                {
+                  "dataType": {
+                    "mode": "chose",
+                    "label": "String"
+                  },
+                  "defineAsPrimaryKey": {
+                    "mode": "chose"
+                  }
+                },
+                {
+                  "dataType": {
+                    "mode": "chose",
+                    "label": "String"
+                  },
+                  "defineAsPrimaryKey": {
+                    "mode": "chose"
+                  }
+                }
+              ]
+            },
+            "chooseSource": {
+              "label": "Manually map table columns"
+            },
+            "dataPoolMapping": {
+              "label": "Select from the list"
+            },
+            "dataPoolSelected": {
+              "label": "1. PO Agent"
+            },
+            "ingestionConnection": {
+              "label": "➕ New Connection"
+            }
+          },
+          "parameters": {
+            "__IMTCONN__": {
+              "data": {
+                "scoped": "true",
+                "connection": "celonis3"
+              },
+              "label": "My Celonis User connection"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "__IMTCONN__",
+            "type": "account:celonis3,celonis4",
+            "label": "Connection",
+            "required": true
+          }
+        ],
+        "expect": [
+          {
+            "name": "dataPoolMapping",
+            "type": "select",
+            "label": "Enter Data Pool",
+            "required": true,
+            "validate": {
+              "enum": [
+                "generateStatic",
+                "generateDynamically"
+              ]
+            }
+          },
+          {
+            "name": "dataPoolSelected",
+            "type": "select",
+            "label": "Data Pool",
+            "required": true
+          },
+          {
+            "name": "ingestionConnection",
+            "type": "select",
+            "label": "Data connection",
+            "required": true
+          },
+          {
+            "name": "connectionName",
+            "type": "text",
+            "label": "New connection name",
+            "required": true
+          },
+          {
+            "name": "tableName",
+            "type": "text",
+            "label": "New table name",
+            "required": true
+          },
+          {
+            "name": "chooseSource",
+            "type": "select",
+            "label": "Data source",
+            "required": true,
+            "validate": {
+              "enum": [
+                "manualInput",
+                "csvInput",
+                "automaticCsvInput"
+              ]
+            }
+          },
+          {
+            "name": "newColumns",
+            "spec": {
+              "name": "value",
+              "spec": [
+                {
+                  "name": "name",
+                  "type": "text",
+                  "label": "Column name",
+                  "nested": [
+                    "rpc://celonis/3/validateColumnNameWithoutExistingColumns"
+                  ],
+                  "required": true
+                },
+                {
+                  "name": "defineAsPrimaryKey",
+                  "type": "boolean",
+                  "label": "Define as Primary Key",
+                  "required": true
+                },
+                {
+                  "name": "dataType",
+                  "type": "select",
+                  "label": "Type",
+                  "options": [
+                    {
+                      "label": "String",
+                      "value": "STRING",
+                      "nested": [
+                        {
+                          "name": "value",
+                          "type": "text",
+                          "label": "Value",
+                          "required": true
+                        }
+                      ]
+                    },
+                    {
+                      "label": "Boolean",
+                      "value": "BOOLEAN",
+                      "nested": [
+                        {
+                          "name": "value",
+                          "type": "boolean",
+                          "label": "Value",
+                          "required": true
+                        }
+                      ]
+                    },
+                    {
+                      "label": "Number (decimal)",
+                      "value": "DOUBLE",
+                      "nested": [
+                        {
+                          "name": "value",
+                          "type": "number",
+                          "label": "Value",
+                          "required": true
+                        }
+                      ]
+                    },
+                    {
+                      "label": "Number (integer)",
+                      "value": "LONG",
+                      "nested": [
+                        {
+                          "name": "value",
+                          "type": "number",
+                          "label": "Value",
+                          "required": true
+                        }
+                      ]
+                    },
+                    {
+                      "label": "Date & Time",
+                      "value": "DATETIME",
+                      "nested": [
+                        {
+                          "help": "Please enter the date and time in the format yyyy-MM-dd HH:mm:ss.",
+                          "name": "dateTimeValue",
+                          "type": "text",
+                          "label": "Value",
+                          "nested": [
+                            "rpc://celonis/3/validateDateAndTime"
+                          ],
+                          "required": true
+                        }
+                      ]
+                    },
+                    {
+                      "label": "Date",
+                      "value": "DATE",
+                      "nested": [
+                        {
+                          "help": "Please enter the date in the format yyyy-MM-dd.",
+                          "name": "dateValue",
+                          "type": "text",
+                          "label": "Value",
+                          "nested": [
+                            "rpc://celonis/3/validateDate"
+                          ],
+                          "required": true
+                        }
+                      ]
+                    }
+                  ],
+                  "required": true
+                }
+              ],
+              "type": "collection",
+              "label": "Column"
+            },
+            "type": "array",
+            "label": "New columns"
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "module": "util:FunctionSleep",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "duration": "10"
+      },
+      "metadata": {
+        "designer": {
+          "x": 600,
+          "y": 0
+        },
+        "restore": {},
+        "expect": [
+          {
+            "name": "duration",
+            "type": "uinteger",
+            "label": "Delay",
+            "required": true,
+            "validate": {
+              "max": 300,
+              "min": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "module": "celonis:notifyComplete",
+      "version": 3,
+      "parameters": {
+        "__IMTCONN__": 68206
+      },
+      "mapper": {
+        "type": "create-simulation-table",
+        "timestamp": "{{now}}",
+        "instanceId": "{{var.input.dpInstanceId}}",
+        "scenarioId": "{{var.scenario.id}}",
+        "executionId": "{{var.scenario.executionId}}"
+      },
+      "metadata": {
+        "designer": {
+          "x": 900,
+          "y": 0
+        },
+        "restore": {
+          "expect": {
+            "type": {
+              "label": "(create-oe-table) Create OE Table"
+            },
+            "payload": {
+              "mode": "chose",
+              "label": "Empty"
+            }
+          },
+          "parameters": {
+            "__IMTCONN__": {
+              "data": {
+                "scoped": "true",
+                "connection": "celonis7"
+              },
+              "label": "OE connection"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "__IMTCONN__",
+            "type": "account:celonis7",
+            "label": "Connection",
+            "required": true
+          }
+        ],
+        "expect": [
+          {
+            "name": "instanceId",
+            "type": "text",
+            "label": "Digital Process Instance ID",
+            "required": true
+          },
+          {
+            "name": "executionId",
+            "type": "text",
+            "label": "Action Flow Execution ID",
+            "required": true
+          },
+          {
+            "name": "scenarioId",
+            "type": "text",
+            "label": "Action Flow ID",
+            "required": true
+          },
+          {
+            "name": "type",
+            "type": "select",
+            "label": "Event Type",
+            "required": true
+          },
+          {
+            "name": "timestamp",
+            "type": "date",
+            "label": "Timestamp"
+          },
+          {
+            "name": "subject",
+            "type": "text",
+            "label": "Subject"
+          },
+          {
+            "name": "payload",
+            "type": "select",
+            "label": "Payload",
+            "validate": {
+              "enum": [
+                "text"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "slots": null,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false
+    },
+    "designer": {
+      "orphans": []
+    },
+    "zone": "integromat.eu-1.k8s.celonis.cloud",
+    "notes": []
+  },
+  "io": {
+    "input_spec": [
+      {
+        "help": "",
+        "name": "dpInstanceId",
+        "type": "text",
+        "label": "",
+        "default": "",
+        "required": false,
+        "multiline": false
+      }
+    ],
+    "output_spec": []
+  }
+}

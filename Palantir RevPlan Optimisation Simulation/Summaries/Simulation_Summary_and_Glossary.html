@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LG Innotek SCM Simulation — Summary & Glossary</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f6f9; color: #1d2433; line-height: 1.6; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 40px 28px 80px; }
+  header.hero { background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); color: #fff; border-radius: 16px; padding: 36px 34px; margin-bottom: 32px; box-shadow: 0 10px 30px rgba(30,58,138,.18); }
+  header.hero .kicker { font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; opacity: .85; margin: 0 0 8px; }
+  header.hero h1 { margin: 0 0 10px; font-size: 28px; line-height: 1.25; }
+  header.hero p { margin: 0; font-size: 15px; opacity: .92; max-width: 640px; }
+  .tagbar { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag { background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.25); padding: 4px 12px; border-radius: 999px; font-size: 12.5px; }
+  section { background: #fff; border-radius: 14px; padding: 26px 30px; margin-bottom: 22px; box-shadow: 0 2px 10px rgba(16,24,40,.05); border: 1px solid #eceff4; }
+  h2 { font-size: 20px; margin: 0 0 14px; color: #1e3a8a; display: flex; align-items: center; gap: 10px; }
+  h2 .num { background: #1e3a8a; color: #fff; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+  p { margin: 0 0 14px; }
+  .flow { background: #f1f5fd; border: 1px dashed #b9cdf5; border-radius: 10px; padding: 16px 18px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; color: #1e3a8a; margin: 8px 0 18px; line-height: 1.9; overflow-x: auto; }
+  .callout { border-left: 4px solid #2563eb; background: #f5f8ff; padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .risk { border-left-color: #d97706; background: #fffaf0; }
+  .risk strong { color: #b45309; }
+  .uc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }
+  .uc { border: 1px solid #e5e9f0; border-radius: 12px; padding: 18px 20px; background: #fbfcfe; }
+  .uc .badge { font-size: 12px; font-weight: 600; color: #2563eb; background: #e7efff; padding: 3px 10px; border-radius: 6px; display: inline-block; margin-bottom: 8px; }
+  .uc h4 { margin: 0 0 6px; font-size: 15.5px; color: #0f172a; }
+  .uc .file { font-family: "SF Mono", Menlo, monospace; font-size: 12px; color: #64748b; margin-bottom: 10px; word-break: break-all; }
+  .uc p { font-size: 14px; margin: 0; }
+  table.gloss { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  table.gloss th { text-align: left; background: #1e3a8a; color: #fff; padding: 10px 14px; font-size: 13px; }
+  table.gloss th:first-child { border-radius: 8px 0 0 0; width: 200px; }
+  table.gloss th:last-child { border-radius: 0 8px 0 0; }
+  table.gloss td { padding: 12px 14px; border-bottom: 1px solid #eceff4; font-size: 14px; vertical-align: top; }
+  table.gloss tr:last-child td { border-bottom: none; }
+  table.gloss td:first-child { font-weight: 600; color: #1e3a8a; }
+  table.gloss .kr { display: block; font-weight: 400; color: #94a3b8; font-size: 12.5px; margin-top: 2px; }
+  .src { font-size: 12.5px; color: #64748b; margin-top: 8px; font-style: italic; }
+  footer { text-align: center; font-size: 12.5px; color: #94a3b8; margin-top: 30px; }
+  @media (max-width: 640px) { .uc-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="kicker">FY26 &middot; Celonis &times; LG Innotek</p>
+    <h1>SCM Production Simulation &mdash; What It Is &amp; Key Terms</h1>
+    <p>A plain-language summary of the production capacity simulation for the Gumi substrate plant, plus a glossary of the manufacturing and supply-chain terms behind it.</p>
+    <div class="tagbar">
+      <span class="tag">Manufacturing &middot; Substrate (&#44592;&#54032;) BU</span>
+      <span class="tag">Oracle ERP</span>
+      <span class="tag">Implementation phase</span>
+      <span class="tag">Customer: LG Innotek</span>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="num">1</span> The big picture</h2>
+    <p>The LG Innotek SCM team (substrate / &#44592;&#54032; business unit, Gumi plant) runs a <strong>production capacity simulation</strong> to answer one core question:</p>
+    <div class="callout"><em>"If we commit to this production plan, can we actually make it &mdash; and will we hit our revenue target?"</em></div>
+    <p>Today they do this in a homegrown Excel file refined over 5+ years. It's accurate and trusted, but manual, slow, impossible to share (confidential), and must be re-run by hand every time the Move Plan changes. The earlier Palantir Foundry POC tried to systematize it but was never usable in practice &mdash; data wasn't fully connected, some logic was incomplete, and it was built for executives rather than the planners doing the work.</p>
+    <p><strong>The Celonis project's job is to rebuild this simulation properly</strong> so practitioners can actually use it, with automatic runs, scenario variables, and outputs that lead to concrete decisions.</p>
+    <p class="src">Source: 260609_LGI_&#51064;&#53552;&#48624; &#45432;&#53944;_&#49884;&#48036;&#47112;&#51060;&#49496; &#44288;&#47144;(SCM)</p>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span> What it actually computes</h2>
+    <p>At its core, the simulation is a <strong>load-vs-capacity check</strong>. It takes the demand plan, translates it into work at each manufacturing process step, and checks where that work exceeds equipment capacity:</p>
+    <div class="flow">
+      Move Plan<br>
+      &nbsp;&nbsp;&rarr; apply model Routing<br>
+      &nbsp;&nbsp;&rarr; compute per-process load / demand<br>
+      &nbsp;&nbsp;&rarr; apply yield (&#49688;&#50984;)<br>
+      &nbsp;&nbsp;&rarr; compare against CAPA<br>
+      &nbsp;&nbsp;&rarr; identify bottlenecks<br>
+      &nbsp;&nbsp;&rarr; derive required actions
+    </div>
+    <p>When load exceeds capacity, planners decide what to do: cut revenue, launch a productivity-improvement task, evaluate investment, or reallocate work between partners/factories. The point is that the result feeds a follow-up action &mdash; not just a dashboard.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span> The two simulations in your folder</h2>
+    <p>These map directly to the two use cases discussed in the interview:</p>
+    <div class="uc-grid">
+      <div class="uc">
+        <span class="badge">UC2-1 &middot; Order Companion</span>
+        <h4>Urgent Order Response</h4>
+        <div class="file">2-1.&#44144;&#44553;_&#50724;&#45908;_&#45824;&#51025;.ipynb</div>
+        <p>A WIP-lot allocation algorithm for emergency orders. ~30% of orders are urgent (~300 in revenue terms) and only ~50% get accepted today. With a ~90-day lead time, it asks: given lots already in progress, can we slot an urgent order in without breaking existing commitments? The pain isn't penalties &mdash; it's lost revenue and market share when orders must be declined.</p>
+      </div>
+      <div class="uc">
+        <span class="badge">UC2-2 &middot; RevPlan Optimizer</span>
+        <h4>Scenario-Based Simulation</h4>
+        <div class="file">2-2.&#49884;&#45208;&#47532;&#50724;_&#48288;&#51060;&#49828;_&#49884;&#48036;&#47112;&#51060;&#49496;.ipynb</div>
+        <p>The bigger engine: a <strong>Revenue-Driven Allocation Engine</strong> (&#49688;&#51061; &#44592;&#48152; &#50857;&#47049; &#54624;&#45817; &#50856;&#51652;). It decides, for each production step, <em>when</em> to run it, <em>on which equipment</em>, and <em>how much</em> new production (Virtual Lots) to create to fill demand gaps. It processes month by month (202602 &rarr; 202603 &rarr; &hellip;), allocates capacity by model priority within each month, and carries unmet demand forward.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span> Constraints the simulation must honor</h2>
+    <p>The simulation isn't a simple sum &mdash; it reflects several real-world rules the SCM team called out: <strong>Grouping Models</strong> (similar models grouped together, using average/median values for new models), <strong>Mix CAPA</strong> (special-process throughput depends on the mix of models running), <strong>prototype CAPA reservation</strong> (reserve ~10&ndash;20% of capacity for prototypes &mdash; an adjustable variable), <strong>equipment constraints</strong> (some equipment is blocked for certain models), and <strong>multi-factor priority</strong> (revenue is the #1 KPI, but material availability, lead time, margin, and customer priority all matter depending on the period).</p>
+  </section>
+
+  <section>
+    <h2><span class="num">5</span> Where they want it to go</h2>
+    <p>The target is automatic execution whenever a new Move Plan or Business Plan drops (no manual re-runs), driven by both the short-term Move Plan (revenue achievement) and the longer-term Business Plan (investment / CAPA decisions), over a 1-year+ horizon, with user-adjustable scenario variables and outputs that lead to concrete follow-up actions (graphs, summary dashboard, Excel export). There's also appetite for AI on top &mdash; recommending similar grouping models, suggesting responses to new situations, and a copilot-style assistant.</p>
+    <div class="callout risk">
+      <strong>&#9888; Known risk:</strong> The trusted Excel logic could <strong>not be shared</strong> (confidential), and the interview note says a <strong>Gumi plant visit is required</strong> to capture the real logic. So the current notebooks reflect the reconstructed Palantir logic &mdash; <em>not</em> the validated Excel logic. Treat this gap as an open risk when assessing correctness.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">6</span> Glossary &mdash; manufacturing &amp; SCM terms</h2>
+    <p>The terms you'll keep running into across the notebooks and interview notes:</p>
+    <table class="gloss">
+      <thead><tr><th>Term</th><th>What it means</th></tr></thead>
+      <tbody>
+        <tr><td>CAPA<span class="kr">Capacity / &#52098;&#54028;</span></td><td>The maximum amount a process or piece of equipment can produce in a given period (e.g. sheets per day). The simulation's whole job is checking whether planned demand <em>fits inside</em> CAPA. When demand &gt; CAPA, you have a bottleneck.</td></tr>
+        <tr><td>Grouping Model<span class="kr">&#44536;&#47353;&#54591; &#47784;&#54664;</span></td><td>Rather than simulating every individual product model (there are too many, and new ones appear constantly), LGI groups models with <em>similar routing and process characteristics</em> and simulates the group using assumed/average values. New models inherit defaults (e.g. median lead time) from the closest existing group. Trades a little precision for a usable, maintainable model.</td></tr>
+        <tr><td>Mix CAPA<span class="kr">&#48127;&#49828; &#52098;&#54028;</span></td><td>For special processes, real throughput isn't a flat number &mdash; it depends on <em>which models are running together and in what proportion</em>. The same machine might process more of Model A and less of Model B. So capacity has to be computed from the model mix, not a single standard rate.</td></tr>
+        <tr><td>Lot<span class="kr">&#47196;&#53944;</span></td><td>A batch of product that moves through the manufacturing process together. The basic unit the simulation schedules and tracks.</td></tr>
+        <tr><td>WIP<span class="kr">Work In Progress / &#51116;&#44277;</span></td><td>Lots already in progress on the line &mdash; partially completed work. The urgent-order engine (UC2-1) allocates against WIP to see if a new order can be accommodated without disrupting committed lots.</td></tr>
+        <tr><td>Virtual Lot<span class="kr">&#44032;&#49345; &#47196;&#53944;</span></td><td>A "what-if" lot the engine creates to cover a demand shortfall. It doesn't exist yet on the line &mdash; it's the simulation proposing new production needed to meet a plan.</td></tr>
+        <tr><td>Process Step<span class="kr">&#44277;&#51221; &#45800;&#44228;</span></td><td>A single operation in the manufacturing sequence (e.g. Drilling, AOI inspection). A model's full sequence of steps is its Routing.</td></tr>
+        <tr><td>Routing<span class="kr">&#46972;&#50864;&#54021; / &#44277;&#51221; &#44221;&#47196;</span></td><td>The defined sequence of process steps a given model must pass through to be built. The simulation applies a model's routing to turn demand into per-step workload.</td></tr>
+        <tr><td>Equipment Group<span class="kr">&#49444;&#48708; &#44536;&#47353;</span></td><td>A set of machines that can all perform the same operation. A process step is allocated to an equipment group rather than one fixed machine, giving the engine flexibility.</td></tr>
+        <tr><td>Yield<span class="kr">&#49688;&#50984;</span></td><td>The percentage of input that comes out as good product (the rest is scrap/rework). The sim applies yield so that to ship N good units you must start more than N &mdash; which raises the real load on each process.</td></tr>
+        <tr><td>Lead Time<span class="kr">&#47532;&#46300;&#53440;&#51076;</span></td><td>The total time to produce a product end-to-end. At LGI this is long &mdash; about 90 days, sometimes over 4 months &mdash; which is exactly why simulating capacity ahead of time matters.</td></tr>
+        <tr><td>Move Plan<span class="kr">&#51060;&#46041;&#44228;&#54925;</span></td><td>The short-term production/shipment plan aimed at hitting revenue. It's the primary trigger: the team wants the sim to run automatically every time the Move Plan changes.</td></tr>
+        <tr><td>Business Plan<span class="kr">&#49324;&#50629;&#44228;&#54925;</span></td><td>The longer-term plan used for investment and capacity decisions (and to secure funding). Revised continuously from ~July&ndash;August for the next year. The team wants this fed into the sim too.</td></tr>
+        <tr><td>Prototype CAPA<span class="kr">&#49884;&#51228;&#54408; &#52098;&#54028;</span></td><td>A reserved slice of total capacity set aside for prototype/sample production (e.g. 10&ndash;20%), separate from mass-production CAPA. The reservation ratio is adjustable, so it's modeled as a simulation variable. The Excel had "with-prototype" and "without-prototype" versions of the load analysis.</td></tr>
+        <tr><td>Net Demand<span class="kr">&#49692; &#49688;&#50836;</span></td><td>The net production quantity required per model per month &mdash; the demand the engine tries to fulfill before creating Virtual Lots for any shortfall.</td></tr>
+        <tr><td>Carryover<span class="kr">&#51060;&#50900;</span></td><td>Demand not met this month rolls into the next. Important nuance in the engine: carryover counts <em>allocated</em> units, not on-time completed units &mdash; once a lot is scheduled the demand is treated as covered, preventing duplicate lots for already-covered demand.</td></tr>
+        <tr><td>Target Month<span class="kr">&#47785;&#54364; &#50900;</span></td><td>The month a given demand must be satisfied in. A final "ready-to-ship" step can be made to wait until the target month so the plant doesn't deliver early.</td></tr>
+        <tr><td>Allocation<span class="kr">&#54624;&#45817;</span></td><td>Assigning a lot's process step to a specific date and piece of equipment. The UC2-2 engine is fundamentally an allocation engine.</td></tr>
+        <tr><td>Fast-track<span class="kr">&#54056;&#49828;&#53944;&#47000;&#53944;</span></td><td>A mechanism letting high-priority models clear more process steps per day (e.g. up to 5 instead of the normal 2), so urgent/important demand moves through faster.</td></tr>
+        <tr><td>Bottleneck<span class="kr">&#48337;&#47785;</span></td><td>The process or equipment where required load exceeds capacity &mdash; the constraint that limits overall output and triggers a decision (reduce demand, add capacity, invest, reallocate).</td></tr>
+        <tr><td>OTD<span class="kr">On-Time Delivery / 납기준수율</span></td><td>The rate at which orders are delivered by their promised date &mdash; a key supply-chain KPI raised in the RevPlan use case.</td></tr>
+        <tr><td>Unit conversion<span class="kr">PNL &middot; SHT &middot; STR &middot; EA</span></td><td>Substrate quantities are tracked at several nested levels and converted between them. The notebook hierarchy is <strong>Sheets &gt; Panels &gt; Units</strong>; the interview also references PNL (panel) &gt; SHT (sheet) &gt; STR &gt; EA (each). Capacity and demand must be converted to a common unit before they can be compared.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>Prepared for the FY26 LG Innotek Celonis project &middot; Sources: 2-1 &amp; 2-2 simulation notebooks and the 2026-06-09 SCM simulation interview note.</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RevPlan Optimiser → PPS / RTS Source Replacement Mapping</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#5b6472; --line:#e4e7ec; --paper:#ffffff; --bg:#f4f5f7;
+    --indigo:#3b3f8f; --indigo-soft:#eef0fb;
+    --green:#1b7a4b; --green-bg:#e7f5ee;
+    --amber:#9a6700; --amber-bg:#fdf3e2;
+    --red:#a3323d; --red-bg:#fbecee; --grey:#5b6472; --grey-bg:#eef0f2;
+    --code:#f3f4f6;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+    line-height:1.55; font-size:15px;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:48px 28px 80px;}
+  header.masthead{
+    border-bottom:3px solid var(--indigo); padding-bottom:22px; margin-bottom:34px;
+  }
+  .eyebrow{font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--indigo); font-weight:700;}
+  h1{font-size:30px; line-height:1.2; margin:8px 0 6px; letter-spacing:-.01em;}
+  .sub{color:var(--muted); font-size:15px; max-width:760px;}
+  .meta{margin-top:14px; font-size:12.5px; color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 22px;}
+  .meta b{color:var(--ink); font-weight:600;}
+
+  section{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:26px 28px; margin-bottom:22px;}
+  h2{font-size:20px; margin:0 0 4px; letter-spacing:-.01em;}
+  h2 .num{color:var(--indigo); font-variant-numeric:tabular-nums; margin-right:10px;}
+  .lead{color:var(--muted); margin:0 0 18px; font-size:14.5px;}
+  h3{font-size:15px; margin:22px 0 10px; color:var(--ink);}
+
+  /* Summary band */
+  .summary{background:linear-gradient(180deg,#fbfbfe, #f6f7fd); border-color:#d9dcf0;}
+  .stats{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin:4px 0 24px;}
+  .stat{border:1px solid var(--line); border-radius:10px; padding:14px 12px; background:#fff; text-align:center;}
+  .stat .n{font-size:26px; font-weight:750; line-height:1; font-variant-numeric:tabular-nums;}
+  .stat .l{font-size:11.5px; color:var(--muted); margin-top:6px; line-height:1.3;}
+  .stat.full .n{color:var(--green);} .stat.part .n{color:var(--amber);}
+  .stat.none .n{color:var(--red);} .stat.der .n{color:var(--grey);} .stat.ctrl .n{color:var(--indigo);}
+
+  ol.play{margin:0; padding-left:0; list-style:none; counter-reset:step;}
+  ol.play li{position:relative; padding:13px 16px 13px 52px; border:1px solid var(--line); border-radius:10px; margin-bottom:10px; background:#fff;}
+  ol.play li::before{
+    counter-increment:step; content:counter(step);
+    position:absolute; left:14px; top:13px; width:26px; height:26px; border-radius:50%;
+    background:var(--indigo); color:#fff; font-size:13px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
+  ol.play li b{display:block; margin-bottom:1px;}
+  ol.play li span{color:var(--muted); font-size:13.5px;}
+  .risk{border-left:4px solid var(--red)!important;}
+  .risk::before{background:var(--red);}
+
+  table{width:100%; border-collapse:collapse; margin:6px 0 4px; font-size:13.5px;}
+  th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top;}
+  thead th{background:var(--indigo-soft); color:var(--indigo); font-size:11.5px; letter-spacing:.04em; text-transform:uppercase; border-bottom:1px solid #d9dcf0;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:#fafbff;}
+  td.eng{font-weight:600; white-space:nowrap;}
+  code{background:var(--code); border:1px solid var(--line); border-radius:5px; padding:1px 5px; font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:12px; color:#27324a;}
+
+  .badge{display:inline-block; font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; white-space:nowrap;}
+  .b-full{background:var(--green-bg); color:var(--green);}
+  .b-part{background:var(--amber-bg); color:var(--amber);}
+  .b-none{background:var(--red-bg); color:var(--red);}
+  .b-der{background:var(--grey-bg); color:var(--grey);}
+
+  .note{border-radius:10px; padding:14px 16px; margin:14px 0; font-size:13.8px;}
+  .note .t{font-weight:700; margin-bottom:3px;}
+  .note.warn{background:var(--amber-bg); border:1px solid #f1dcb0;}
+  .note.warn .t{color:var(--amber);}
+  .note.key{background:var(--red-bg); border:1px solid #f0cfd3;}
+  .note.key .t{color:var(--red);}
+
+  .caveat{display:flex; gap:14px; padding:14px 0; border-bottom:1px dashed var(--line);}
+  .caveat:last-child{border-bottom:none;}
+  .caveat .tag{flex:0 0 38px; height:38px; border-radius:9px; background:var(--indigo); color:#fff; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:16px;}
+  .caveat .body{flex:1;}
+  .caveat .body b{display:block; margin-bottom:2px;}
+  .caveat .body p{margin:0; color:var(--muted); font-size:13.6px;}
+
+  .pillrow{display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;}
+  .pill{font-size:12.5px; background:#fff; border:1px solid var(--line); border-radius:7px; padding:6px 10px;}
+  .pill b{color:var(--indigo);}
+
+  footer{color:var(--muted); font-size:12px; margin-top:30px; text-align:center; line-height:1.7;}
+  footer code{font-size:11px;}
+  @media (max-width:720px){
+    .stats{grid-template-columns:repeat(2,1fr);}
+    .wrap{padding:28px 16px 60px;}
+    table{font-size:12.5px;} td.eng{white-space:normal;}
+  }
+  @media print{
+    body{background:#fff;} section{break-inside:avoid; border-color:#ccc;}
+    .wrap{max-width:none;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">FY26 · LG Innotek · SCM Planning Intelligence</div>
+    <h1>RevPlan Optimiser → PPS / RTS Source Replacement Mapping</h1>
+    <p class="sub">Which raw inputs of the Palantir revenue-driven allocation engine can be sourced directly from the 15 PPS &amp; RTS core tables — and which cannot.</p>
+    <div class="meta">
+      <span><b>Engine:</b> Python Script Allocation Engine (Palantir Foundry transforms)</span>
+      <span><b>Target:</b> PPS_RTS Core Tables EDA Report</span>
+      <span><b>Date:</b> 2026-06-29</span>
+    </div>
+  </header>
+
+  <!-- ============ SUMMARY / INSTRUCTIONS ============ -->
+  <section class="summary">
+    <h2>Summary &amp; instructions</h2>
+    <p class="lead">Of the ~16 <em>raw</em> source inputs the engine consumes (excluding intermediate datasets the pipeline produces itself), here is how they break down — and the order in which to execute the swap.</p>
+
+    <div class="stats">
+      <div class="stat full"><div class="n">9</div><div class="l">Fully replaceable</div></div>
+      <div class="stat part"><div class="n">5</div><div class="l">Partially replaceable</div></div>
+      <div class="stat none"><div class="n">3</div><div class="l">No PPS/RTS equivalent</div></div>
+      <div class="stat der"><div class="n">2</div><div class="l">Derived (don't swap)</div></div>
+      <div class="stat ctrl"><div class="n">1</div><div class="l">Control table (keep)</div></div>
+    </div>
+
+    <h3>Execution playbook</h3>
+    <ol class="play">
+      <li class="risk"><b>Build the model-key crosswalk first — highest risk.</b><span>The engine keys on <code>model_id</code> = PPS <code>MODEL_NO</code> (<code>MGC5C013</code>). RTS &amp; ERP tables key on <code>PRODID</code> / <code>MODEL_CODE</code> (<code>SPSNP4001K.K040</code>). Establish and validate <code>MODEL_NO ↔ PRODID</code> — most likely via <code>PK1_MODEL.SAP_CODE</code> / <code>CUSTOMER_MODEL_NO</code> — before anything else joins.</span></li>
+      <li><b>Swap the 9 direct inputs to PPS/RTS.</b><span>Biggest wins: <code>RTSP_WIP_N</code> replaces both <code>wip_lots</code> and <code>process_steps</code>; <code>PK1_MODEL</code> replaces <code>model_master</code> + <code>model_unit_conversion</code>; <code>PK1_MPLAN</code> replaces <code>revenue_plan</code>; <code>PK1_BOM</code>, <code>PK1_MATERIAL</code>, <code>PK1_EQUIPMENT</code> cover the rest.</span></li>
+      <li><b>For the 5 partials, take the structure from PPS/RTS and keep deriving the analytics columns.</b><span>e.g. routing structure from <code>RTSP_MODEL_ROUTING_M</code> + lead times from <code>PK1_MODEL_ROUTE</code>, but continue computing the per-panel/second event-time fields. Reconstruct the Korean equipment-group taxonomy for capacity mapping.</span></li>
+      <li><b>Convert currency through <code>PK1_EX_RATE</code>.</b><span>The engine expects <code>sales_unit_price_krw</code>; <code>PK1_MODEL.SALES_PRICE</code> / <code>ODS_ERP_MODEL_PRICE.LIST_PRICE</code> are frequently USD/CNY.</span></li>
+      <li><b>Leave the 3 gaps on their current feeds.</b><span><code>equipment_constraints</code> (business-rule overlay), <code>planned_material_arrivals</code> (needs a procurement/PO ETA feed), and <code>sales_order_lines</code> (needs an ERP sales-order feed) have no equivalent in the core set.</span></li>
+      <li><b>Re-profile on full extracts before cut-over.</b><span>The EDA stats come from ~100-row samples; null% / uniqueness are indicative only. Validate sparse columns (vendor lead time, price currency) at full volume.</span></li>
+    </ol>
+  </section>
+
+  <!-- ============ FULLY REPLACEABLE ============ -->
+  <section>
+    <h2><span class="num">1</span>Fully replaceable <span class="badge b-full">DIRECT</span></h2>
+    <p class="lead">Column-for-column substitution available from a single PPS or RTS table.</p>
+    <table>
+      <thead><tr><th>Engine input</th><th>Replace with</th><th>Join key</th><th>Key columns / notes</th></tr></thead>
+      <tbody>
+        <tr><td class="eng">revenue_plan</td><td>PPS <code>PK1_MPLAN</code></td><td><code>MODEL_NO</code>, <code>YYYYMM</code></td><td><code>REVISION_NO</code>→revenue_plan_id, <code>PLAN_QTY</code>→qty, <code>PLAN_AMT</code>→amount. <em>Confirmed: flat-file <code>revenue_plan_id</code> = <code>MP202410-43W-005</code> matches <code>REVISION_NO</code> format.</em></td></tr>
+        <tr><td class="eng">model_master</td><td>PPS <code>PK1_MODEL</code></td><td><code>MODEL_NO</code></td><td><code>CUSTOMER_NAME</code>, <code>END_CUSTOMER</code>, <code>SALES_TEAM</code>, <code>SALES_PERSON</code>, <code>LOT_SIZE</code>, <code>YIELD</code>, <code>SALES_PRICE</code>(+currency), <code>ADJUST_LEADTIME</code></td></tr>
+        <tr><td class="eng">model_unit_conversion</td><td>PPS <code>PK1_MODEL</code></td><td><code>MODEL_NO</code></td><td><code>EA_IN_PANNEL</code>, <code>EA_IN_SHEET</code> (panels_per_sheet = sheet/panel). Also RTS <code>RTSP_MODEL_ROUTING_M.PNLPERSHT</code></td></tr>
+        <tr><td class="eng">model_boms</td><td>PPS <code>PK1_BOM</code></td><td><code>MODEL_NO</code></td><td><code>MATERIAL_NO</code>, <code>WORK_SEQ</code>, <code>OPERATION_CODE</code>, <code>CHASU</code>, <code>REQ_QTY</code> (uom via <code>PK1_MATERIAL</code>)</td></tr>
+        <tr><td class="eng">material_master</td><td>PPS <code>PK1_MATERIAL</code></td><td><code>MATERIAL_NO</code></td><td>desc, <code>UOM</code>, <code>THICKNESS</code>, vendor / lead-time</td></tr>
+        <tr><td class="eng">wip_lots</td><td>RTS <code>RTSP_WIP_N</code></td><td><code>LOTID</code> / <code>PRODID</code></td><td><code>WIPUNITQTY</code>/<code>REAL_WIPUNITQTY</code>, <code>WIPSHTQTY</code>, <code>PROCID</code>/<code>OP_CODE</code>, <code>SEQ</code>/<code>PROCSEQ</code>/<code>ROUTING_SEQ</code>, <code>EQPTID</code>, <code>LEFT_STEP_PER_DAY</code>, <code>RECEIPT_TARGET_DAY</code></td></tr>
+        <tr><td class="eng">process_steps</td><td>RTS <code>RTSP_WIP_N</code></td><td><code>LOTID</code></td><td><code>EMERGENCY_LOT_FLAG</code>, <code>EMERGENCY_TYPE</code>, <code>RECEIPT_TARGET_DAY</code>→incoming_target_date, <code>WIPDTTM_ST</code>→input_date, <code>ROUTING_SEQ</code> — <em>same source as wip_lots</em></td></tr>
+        <tr><td class="eng">equipment_capacity</td><td>PPS <code>PK1_EQUIPMENT</code></td><td><code>EQUIPMENT_CODE</code></td><td><code>DAILY_CAPA</code> (+ <code>DAILY_CAPA_TYPE1..5</code>, <code>MUP_CAPA</code>)</td></tr>
+        <tr><td class="eng">capacity_constraints</td><td>PPS <code>PK1_EQUIPMENT</code></td><td>group via <code>MAPPING_NAME</code></td><td><code>DAILY_CAPA</code> aggregated to equipment-group grain</td></tr>
+      </tbody>
+    </table>
+    <div class="note warn"><div class="t">Two-for-one wins</div><code>RTSP_WIP_N</code> replaces <b>two</b> inputs (real-time WIP snapshot with emergency flags, target dates &amp; quantities). <code>PK1_MODEL</code> replaces <b>three</b> (model master, unit conversion, and feeds the pricing side of <code>model_priorities</code>).</div>
+  </section>
+
+  <!-- ============ PARTIAL ============ -->
+  <section>
+    <h2><span class="num">2</span>Partially replaceable <span class="badge b-part">STRUCTURE YES, SOME FIELDS DERIVED</span></h2>
+    <p class="lead">The shape comes from PPS/RTS, but some fields are computed analytics or have no raw column.</p>
+    <table>
+      <thead><tr><th>Engine input</th><th>Replace with</th><th>What's missing / needs work</th></tr></thead>
+      <tbody>
+        <tr><td class="eng">model_routings / planned_process_steps</td><td>RTS <code>RTSP_MODEL_ROUTING_M</code> (authoritative work-sequence: <code>SEQ</code>, <code>OP_CODE/OP_NAME</code>, <code>OP_MACHINE_CODE/NAME</code>, <code>PROCID</code>, <code>PROCSEQ</code>) + PPS <code>PK1_MODEL_ROUTE</code> (<code>LEADTIME</code>, <code>RUN_LT</code>, <code>WAIT_LT</code>)</td><td>Routing <em>structure</em> fully covered; <code>q1_panel_in_seconds</code> / <code>mpi_Q1_wait_time_in_seconds</code> are <b>derived event-time analytics</b> — keep computing them</td></tr>
+        <tr><td class="eng">available_inventory</td><td>PPS <code>PK1_ERP_ONHAND_LOT</code> (on-hand FGI by <code>MODEL_CODE</code>) + <code>PK1_DAILY_INVENTORY</code></td><td>on-hand / total inventory ✅; <b><code>shipped_quantity_ea</code> has no source here</b> (needs shipment/SO feed); sheet conversion via <code>PK1_MODEL</code></td></tr>
+        <tr><td class="eng">material_inventories</td><td>PPS <code>PK1_DAILY_INVENTORY</code> / <code>PK1_ERP_ONHAND_LOT</code></td><td>Aggregate on-hand by material; <code>ERP_ONHAND_LOT</code> sample is FGI-centric — confirm raw-material item types are covered</td></tr>
+        <tr><td class="eng">equipment_to_process</td><td>Derive from RTS <code>RTSP_MODEL_ROUTING_M</code> (<code>OP_CODE</code>↔<code>OP_MACHINE_CODE</code>/<code>PROCID</code>)</td><td>No ready-made capability table; build it from routing</td></tr>
+        <tr><td class="eng">equipment_mapping (process→group)</td><td>Derive from PPS <code>PK1_OPERATION</code> (<code>MODIFIED_GROUP</code>) + <code>PK1_EQUIPMENT.MAPPING_NAME</code></td><td>Korean equipment-group taxonomy (입고대기, LDI 노광, 3D측정기 …) must be reconstructed</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ NONE ============ -->
+  <section>
+    <h2><span class="num">3</span>No equivalent in the PPS/RTS core set <span class="badge b-none">KEEP CURRENT FEED</span></h2>
+    <p class="lead">These need a different source or a maintained table — they are not in the 15 core tables.</p>
+    <table>
+      <thead><tr><th>Engine input</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td class="eng">equipment_constraints</td><td>A <b>business-rule overlay</b> (equipment blocked for a model/process), not master data. RTS routing gives <em>allowed</em> machines; the block-list isn't in PPS/RTS. Keep as a maintained table.</td></tr>
+        <tr><td class="eng">planned_material_arrivals</td><td>No PO / material-receipt schedule table in the core set (<code>PK1_MATERIAL.VENDOR_LEAD_TIME</code> is 100% null in the sample). Needs a procurement feed.</td></tr>
+        <tr><td class="eng">sales_order_lines</td><td>No sales-order table here. Only consumed by the uncommitted-demand modules.</td></tr>
+        <tr><td class="eng">et_jig_master</td><td>Specialised ET-JIG tooling master (<code>대상_모델</code>, <code>JIG대수</code>, <code>Capa_Lot/Sheet</code>) — not in PPS/RTS core.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ NOT SOURCES ============ -->
+  <section>
+    <h2><span class="num">4</span>Not raw sources — don't try to replace <span class="badge b-der">DERIVED / CONTROL</span></h2>
+    <table>
+      <thead><tr><th>Input</th><th>Nature</th></tr></thead>
+      <tbody>
+        <tr><td class="eng">model_priorities</td><td>Derived per (simulation, model, month). The priority rank is the <b>MES 우선도</b> (external to PPS/RTS); its <code>amount_per_unit</code> / <code>margin_amount_per_unit</code> <em>can</em> be rebuilt from <code>PK1_MODEL.SALES_PRICE</code> + <code>PK1_EX_RATE</code> + <code>ODS_ERP_MODEL_PRICE</code>.</td></tr>
+        <tr><td class="eng">predicted_event_times (input_data)</td><td>Predicted process durations — recompute from RTS WIP history, not a raw swap.</td></tr>
+        <tr><td class="eng">simulation_config</td><td>The Palantir scenario / tuning <b>control table</b>. Leave it.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ CAVEATS ============ -->
+  <section>
+    <h2><span class="num">5</span>Three caveats that will make or break the swap</h2>
+    <div class="caveat">
+      <div class="tag">1</div>
+      <div class="body"><b>Model-key crosswalk is mandatory.</b><p>Engine <code>model_id</code> = PPS <code>MODEL_NO</code> (<code>MGC5C013</code>, <code>ZGS76011</code>). RTS <code>RTSP_WIP_N</code>/<code>RTSP_MODEL_ROUTING_M</code> use <code>PRODID</code>, and ERP inventory uses <code>MODEL_CODE</code>/<code>ITEM_CODE</code> — both <code>SPSNP4001K.K040</code> form. Map via <code>PK1_MODEL.SAP_CODE</code> / <code>CUSTOMER_MODEL_NO</code> (the current <code>model.txt</code> already carries <code>sap_code</code>/<code>customer_model_no</code>). Validate this first — highest-risk item.</p></div>
+    </div>
+    <div class="caveat">
+      <div class="tag">2</div>
+      <div class="body"><b>Currency.</b><p>Engine wants <code>sales_unit_price_krw</code>; <code>PK1_MODEL.SALES_PRICE</code> and <code>ODS_ERP_MODEL_PRICE.LIST_PRICE</code> are often USD/CNY → convert through <code>PK1_EX_RATE</code>.</p></div>
+    </div>
+    <div class="caveat">
+      <div class="tag">3</div>
+      <div class="body"><b>EDA stats are sample-only.</b><p>Profiling is from ~100-row samples, not full tables. Null% / uniqueness are indicative — re-profile on full extracts before committing, especially sparse columns (<code>VENDOR_LEAD_TIME</code>, price currencies).</p></div>
+    </div>
+
+    <h3>Supporting lookups (pulled in along the way, not 1:1 replacements)</h3>
+    <div class="pillrow">
+      <span class="pill"><b>PK1_OPERATION</b> — process names / flags</span>
+      <span class="pill"><b>PK1_CODE_VALUE / PK1_CODE_TITLE</b> — e.g. hold codes</span>
+      <span class="pill"><b>PK1_EX_RATE</b> — currency conversion</span>
+      <span class="pill"><b>EAI.ODS_ERP_MODEL_PRICE</b> — list price / buyer</span>
+    </div>
+  </section>
+
+  <footer>
+    Generated 2026-06-29 · Sources: <code>Python Script Allocation Engine</code> (Foundry transforms) · <code>PPS_RTS_Core_Tables_EDA_Report.html</code> · <code>260625_핵심 테이블 정리(PPS_RTS).xlsx</code><br>
+    Replaceability based on column-level trace of engine inputs vs. PPS/RTS schemas. Sample-based profiling — validate at full volume before cut-over.
+  </footer>
+
+</div>
+</body>
+</html>

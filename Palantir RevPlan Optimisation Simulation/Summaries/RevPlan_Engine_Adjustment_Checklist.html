@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RevPlan Optimizer — Engine Adjustment Checklist / 엔진 수정 체크리스트</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic","Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#f4f6f9; color:#1d2433; line-height:1.6; }
+  .wrap { max-width:1040px; margin:0 auto; padding:34px 24px 90px; }
+  header.hero { background:linear-gradient(135deg,#3b0764 0%,#7c3aed 100%); color:#fff; border-radius:16px; padding:32px 32px; margin-bottom:20px; box-shadow:0 10px 30px rgba(59,7,100,.22); }
+  header.hero .kicker { font-size:12px; letter-spacing:1.6px; text-transform:uppercase; opacity:.85; margin:0 0 8px; }
+  header.hero h1 { margin:0 0 8px; font-size:24px; line-height:1.3; }
+  header.hero p { margin:0; font-size:14px; opacity:.93; max-width:740px; }
+  .langbar { position:sticky; top:0; z-index:20; background:#fff; border:1px solid #e3e7ee; border-radius:12px; padding:10px 14px; margin-bottom:20px; display:flex; align-items:center; gap:10px; box-shadow:0 2px 8px rgba(16,24,40,.05); }
+  .langbar span.lbl { font-size:12.5px; color:#5b6675; font-weight:600; }
+  .langbar button { font:inherit; font-size:13px; padding:6px 14px; border-radius:8px; border:1px solid #c7d0dd; background:#f7f9fc; color:#1d2433; cursor:pointer; }
+  .langbar button.active { background:#7c3aed; border-color:#7c3aed; color:#fff; font-weight:600; }
+  section { background:#fff; border-radius:14px; padding:24px 28px; margin-bottom:20px; box-shadow:0 2px 10px rgba(16,24,40,.05); border:1px solid #eceff4; }
+  h2 { font-size:19px; margin:0 0 6px; color:#5b21b6; display:flex; align-items:center; gap:10px; }
+  h2 .num { background:#7c3aed; color:#fff; width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; font-size:13px; flex-shrink:0; }
+  p { margin:0 0 12px; } .sub { color:#64748b; font-size:13px; }
+  .flow { background:#f6f2fd; border:1px dashed #cdb4f0; border-radius:10px; padding:14px 18px; font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12.5px; color:#5b21b6; margin:10px 0; line-height:1.85; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:12.5px; }
+  th,td { text-align:left; padding:8px 10px; border:1px solid #e6e9ee; vertical-align:top; }
+  th { background:#3b0764; color:#fff; font-weight:600; font-size:12px; }
+  tr:nth-child(even) td { background:#fafafe; }
+  code { background:#f0ecf9; padding:1px 5px; border-radius:4px; font-size:11.5px; color:#5b21b6; }
+  .have { color:#15803d; font-weight:700; } .fix { color:#b45309; font-weight:700; } .add { color:#1d4ed8; font-weight:700; } .miss { color:#b91c1c; font-weight:700; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; font-size:12.5px; margin:4px 0 12px; }
+  ul.clean { margin:6px 0 12px; padding-left:20px; } ul.clean li { margin-bottom:7px; }
+  .callout { border-left:4px solid #7c3aed; background:#f7f3fe; padding:12px 16px; border-radius:0 8px 8px 0; margin:12px 0; font-size:13.5px; }
+  .risk { border-left-color:#dc2626; background:#fef4f4; } .risk b { color:#b91c1c; }
+  .ok { border-left-color:#16a34a; background:#f1faf4; } .ok b { color:#15803d; }
+  .grp { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:#7c3aed; font-weight:700; margin:14px 0 4px; }
+  .eda-y,.eda-p,.eda-n{font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;white-space:nowrap;display:inline-block;margin-bottom:4px;}
+  .eda-y{background:#dcfce7;color:#15803d;} .eda-p{background:#fef3c7;color:#b45309;} .eda-n{background:#fee2e2;color:#b91c1c;}
+  .edanote{font-size:11.5px;color:#5b6b67;}
+  .pri-b,.pri-h,.pri-m{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:6px;margin-right:6px;white-space:nowrap;color:#fff;}
+  .pri-b{background:#b91c1c;} .pri-h{background:#b45309;} .pri-m{background:#64748b;}
+  footer { text-align:center; font-size:12px; color:#94a3b8; margin-top:26px; }
+  @media print { body{background:#fff;} .langbar{display:none;} section{box-shadow:none;border:1px solid #ddd;break-inside:avoid;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="kicker">FY26 · Celonis × LG이노텍 · RevPlan Optimizer</p>
+    <h1 class="en">RevPlan Optimizer — Engine Adjustment Checklist</h1>
+    <h1 class="ko">RevPlan Optimizer — 엔진 수정 체크리스트</h1>
+    <p class="en">What the real Palantir engine does today (verified in the actual .py code), and module-by-module what to fix, add, or replace — based on the 2026-06-22 Gumi session and the EDA. The previously-missing helper files are now included and verified.</p>
+    <p class="ko">실제 Palantir 엔진이 현재 수행하는 것(실제 .py 코드 확인 기준)과, 2026-06-22 구미 세션 및 EDA를 바탕으로 모듈별로 수정·추가·교체할 항목입니다. 이전에 누락됐던 헬퍼 파일이 이제 포함·검증되었습니다.</p>
+  </header>
+
+  <div class="langbar">
+    <span class="lbl">Language / 언어:</span>
+    <button id="b-both" class="active" onclick="setLang('both')">Both / 둘 다</button>
+    <button id="b-en" onclick="setLang('en')">English</button>
+    <button id="b-ko" onclick="setLang('ko')">한국어</button>
+  </div>
+
+  <section>
+    <h2><span class="num">1</span> <span class="en">What we received (code status)</span><span class="ko">받은 코드 현황</span></h2>
+    <div class="legend">
+      <span><span class="have">● HAVE</span></span><span><span class="have">● ALL RECEIVED ✓</span></span>
+    </div>
+    <table>
+      <thead><tr><th><span class="en">Module</span><span class="ko">모듈</span></th><th><span class="en">Role</span><span class="ko">역할</span></th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td><code>revenue_driven_allocation_refactored.py</code></td><td><span class="en">Main month-by-month allocation engine (2,096 lines)</span><span class="ko">메인 월별 할당 엔진 (2,096줄)</span></td><td class="have">HAVE</td></tr>
+        <tr><td><code>config.py</code> · <code>models.py</code></td><td><span class="en">Config + data structures</span><span class="ko">설정 + 데이터 구조</span></td><td class="have">HAVE</td></tr>
+        <tr><td><code>virtual_lot_creator.py</code></td><td><span class="en">Phase 2 virtual-lot creation</span><span class="ko">2단계 가상 로트 생성</span></td><td class="have">HAVE</td></tr>
+        <tr><td><code>step_priority_assignment.py</code></td><td><span class="en">Priority ranking (emergency→delivery→steps)</span><span class="ko">우선순위 산정(긴급→납기→잔여단계)</span></td><td class="have">HAVE</td></tr>
+        <tr><td><code>net_production_demand.py</code></td><td><span class="en">Inventory-aware net demand (subtract shipped/transit/onhand)</span><span class="ko">재고 반영 순수요(출하/이동/재고 차감)</span></td><td class="have">HAVE</td></tr>
+        <tr><td><code>material_depletion · demand_shortfall · et_jig_capacity_risk · production_risk_reconciliation · uncommitted_demand · unplanned_inventory · revenue_plan_data_quality</code></td><td><span class="en">Risk / material / dashboard support modules</span><span class="ko">리스크/자재/대시보드 보조 모듈</span></td><td class="have">HAVE</td></tr>
+        <tr><td><code>allocation_helpers.py</code></td><td><span class="en">Equipment selection + capacity/priority/constraint lookups (841 lines)</span><span class="ko">설비 선택 + 용량/우선순위/제약 룩업 (841줄)</span></td><td class="have">HAVE ✓</td></tr>
+        <tr><td><code>allocation_run_tracker.py</code></td><td><span class="en">Incremental run tracking (config hash)</span><span class="ko">증분 실행 추적(설정 해시)</span></td><td class="have">HAVE ✓</td></tr>
+        <tr><td><code>predicted_event_times.py</code></td><td><span class="en">Predicted start/finish times — median, Q1, Q3, std — propagated through routing (confidence bands)</span><span class="ko">예상 시작/완료 시각 — 중앙값·Q1·Q3·std — 라우팅 전파(신뢰구간)</span></td><td class="have">HAVE ✓</td></tr>
+        <tr><td><code>simulation_monthly_fulfillment.py</code></td><td><span class="en">Monthly demand vs fulfilled vs shortfall output (wide + long, for dashboard)</span><span class="ko">월별 수요 대 충족 대 부족 출력(wide+long, 대시보드용)</span></td><td class="have">HAVE ✓</td></tr>
+      </tbody>
+    </table>
+    <div class="callout ok"><b><span class="en">All modules now received ✓</span><span class="ko">전 모듈 수신 완료 ✓</span></b> <span class="en">The full engine is in hand, including <code>predicted_event_times.py</code> (Q1/median/Q3 finish times) and <code>simulation_monthly_fulfillment.py</code> (monthly fulfillment output). No engine code is outstanding — only data fixes (MES timestamps, ProductionLot) remain.</span><span class="ko">전체 엔진 확보 — <code>predicted_event_times.py</code>(Q1/중앙/Q3 완료시각), <code>simulation_monthly_fulfillment.py</code>(월별 충족 출력) 포함. 미수신 엔진 코드 없음 — 데이터 수정(MES 타임스탬프, ProductionLot)만 남음.</span></div>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span> <span class="en">How the engine works today</span><span class="ko">현재 엔진 동작 방식</span></h2>
+    <div class="flow">
+      net_production_demand  <span class="en">(demand − shipped/transit/onhand, roll forward)</span><span class="ko">(수요 − 출하/이동/재고, 이월)</span><br>
+      &nbsp;&nbsp;→ step_priority_assignment  <span class="en">(emergency → delivery date → remaining steps)</span><span class="ko">(긴급 → 납기 → 잔여단계)</span><br>
+      &nbsp;&nbsp;→ allocate_month_by_month:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp; FOR <span class="en">month</span><span class="ko">월</span> → FOR <span class="en">model by priority</span><span class="ko">모델(우선순위)</span>:<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; total = base + carryover<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Phase 1: <span class="en">allocate WIP (closest-to-done)</span><span class="ko">WIP 할당(완료 임박)</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Phase 2: <span class="en">create virtual lots × 1.1 buffer</span><span class="ko">가상 로트 생성 ×1.1 버퍼</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="en">schedule each step → least-loaded equipment (cap = sheets/day)</span><span class="ko">단계별 스케줄 → 최저부하 설비(용량=시트/일)</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; carryover = total − units_allocated<br>
+      &nbsp;&nbsp;→ outputs: allocation · new_lots · failed · unrouted · run_tracker
+    </div>
+    <p class="en sub">Greedy, deterministic, equipment-day granularity. Capacity is a flat sheets/day per equipment; priority is a fixed rule; quantities flow 1:1.</p>
+    <p class="ko sub">그리디·결정론적·설비일 단위. 용량은 설비별 평면 시트/일, 우선순위는 고정 규칙, 수량은 1:1 흐름.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span> <span class="en">Module-by-module adjustments</span><span class="ko">모듈별 수정 사항</span></h2>
+    <div class="legend">
+      <span><span class="have">● KEEP</span></span><span><span class="fix">● FIX</span></span><span><span class="add">● ADD</span></span><span><span class="miss">● VERIFY</span></span>
+      <span style="margin-left:8px;"><span class="eda-y">EDA: YES</span> <span class="eda-p">PARTIAL</span> <span class="eda-n">BLOCKED/NO</span> <span class="en">(checked against eda_report)</span><span class="ko">(eda_report 대조)</span></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th><span class="en">Module</span><span class="ko">모듈</span></th>
+        <th><span class="en">Current behavior (verified)</span><span class="ko">현재 동작(확인됨)</span></th>
+        <th><span class="en">Required change</span><span class="ko">필요 변경</span></th>
+        <th><span class="en">Data source</span><span class="ko">데이터 출처</span></th>
+        <th><span class="en">Available in EDA?</span><span class="ko">EDA 데이터 가용?</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><code>virtual_lot_creator.py</code> <span class="fix">FIX</span></td>
+          <td><span class="en">Evenly distributes panels across lots (lines 161–162: <code>//</code> + remainder). Lead time = <code>(steps+1)/2</code> (2 steps/day baked in).</span><span class="ko">패널을 로트에 균등 분배(161–162행: <code>//</code>+나머지). 리드타임 = <code>(steps+1)/2</code>(일 2단계 가정).</span></td>
+          <td><span class="en">Do NOT 평준화 — keep fixed lot size (30/30/30/6). Replace the 2-steps/day lead-time proxy with tact-time-based timing.</span><span class="ko">평준화 금지 — 고정 로트 크기 유지(30/30/30/6). 일 2단계 리드타임 대용치를 택타임 기반으로 교체.</span></td>
+          <td><span class="en"><code>maximum_lot_size_sht</code>; tact time (MES)</span><span class="ko"><code>maximum_lot_size_sht</code>; 택타임(MES)</span></td>
+          <td><span class="eda-p">PARTIAL</span><br><span class="edanote en"><code>lot_size</code> in master (0% null); tact time blocked (WIPHISTORY = mm:ss).</span><span class="edanote ko"><code>lot_size</code> 마스터(0% null); 택타임 차단(WIPHISTORY=mm:ss).</span></td>
+        </tr>
+        <tr>
+          <td><code>revenue_driven_allocation_refactored.py</code> <span class="add">ADD</span></td>
+          <td><span class="en">Quantities flow 1:1 — <b>no yield anywhere</b>. <code>units_produced</code> only on final step.</span><span class="ko">수량 1:1 흐름 — <b>수율 전혀 없음</b>. <code>units_produced</code>는 최종 단계만.</span></td>
+          <td><span class="en">Add yield: inflate input qty per step (투입수율, else 타입수율). Add panel-separation 50/100 load rule.</span><span class="ko">수율 추가: 단계별 투입량 보정(투입수율, 없으면 타입수율). 판넬분리 50/100 부하 규칙 추가.</span></td>
+          <td><span class="en"><code>YIELD/input_yield/type_yield</code>; routing</span><span class="ko"><code>YIELD/input_yield/type_yield</code>; 라우팅</span></td>
+          <td><span class="eda-p">PARTIAL</span><br><span class="edanote en">master <code>yield</code> 98.6% null; actuals in FP <code>Model Yield 실적</code> (16,344 rows). Routing <code>WORK_SEQ</code> ✓; no separation flag → derive.</span><span class="edanote ko">master <code>yield</code> 98.6% null; 실적은 FP <code>Model Yield 실적</code>(16,344행). <code>WORK_SEQ</code> ✓; 분리 플래그 없음 → 도출.</span></td>
+        </tr>
+        <tr>
+          <td><code>allocation_helpers.py</code> — capacity <span class="fix">FIX</span><span class="add">ADD</span></td>
+          <td><span class="en">Capacity = per-equipment <code>daily_capacity_in_sht</code>; infinite groups override. <b>Hardcoded temporary multipliers</b> (2D/3D AFVI ×2, Hole VRS ×10, Hole AOI ×10, 투입=1000) flagged "REMOVE IN FUTURE". Selection = least-loaded (load-balancing).</span><span class="ko">용량 = 설비별 <code>daily_capacity_in_sht</code>; 무한 그룹 오버라이드. <b>하드코딩 임시 배수</b>(2D/3D AFVI ×2, Hole VRS ×10, Hole AOI ×10, 투입=1000)에 "추후 제거" 표기. 선택 = 최저부하(부하분산).</span></td>
+          <td><span class="en">Replace flat per-equipment capacity with Mix-CAPA (model×process×차수); remove/validate the 4 hardcoded multipliers.</span><span class="ko">평면 설비 용량을 믹스 CAPA(모델×공정×차수)로 교체; 하드코딩 배수 4개 제거/검증.</span></td>
+          <td><span class="en">모델 차수 정보 file; <code>daily_capacity_in_sht</code></span><span class="ko">모델 차수 정보 파일; <code>daily_capacity_in_sht</code></span></td>
+          <td><span class="eda-y">YES</span><br><span class="edanote en"><code>daily_capa</code>, <code>machine_group_capa</code>, <code>CAPA</code> present; <code>CHASU</code>(차수) ✓. Mix-CAPA survey: verify dataset.</span><span class="edanote ko"><code>daily_capa</code>·<code>machine_group_capa</code>·<code>CAPA</code> 있음; <code>CHASU</code>(차수) ✓. 믹스 CAPA 조사 데이터셋 확인.</span></td>
+        </tr>
+        <tr>
+          <td><code>allocation_helpers.py</code> — constraints <span class="add">ADD</span></td>
+          <td><span class="en"><b>Negative (RTS) constraints ARE enforced</b> — blocked equipment is excluded from candidates (keyed by grouping_model+process). But <code>build_equipment_constraints_lookup</code> (POSITIVE / whitelist) is built and <b>never used</b> in the engine.</span><span class="ko"><b>네거티브(RTS) 제약은 실제 적용됨</b> — 차단 설비를 후보에서 제외(grouping_model+공정 기준). 단 <code>build_equipment_constraints_lookup</code>(POSITIVE/화이트리스트)는 만들어졌으나 엔진에서 <b>사용 안 함</b>.</span></td>
+          <td><span class="en">Enforce POSITIVE constraints too — customer PCN "only approved equipment" + engineer 가능 (both Y). Negative side already correct.</span><span class="ko">POSITIVE 제약도 적용 — 고객 PCN "승인 설비만" + 엔지니어 가능(둘 다 Y). 네거티브는 이미 정상.</span></td>
+          <td><span class="en">RTS (customer PCN + engineer)</span><span class="ko">RTS(고객 PCN + 엔지니어)</span></td>
+          <td><span class="eda-p">PARTIAL</span><br><span class="edanote en">RTS / PCN raw data present; <code>constraint_type</code> (NEG/POS) is pipeline-derived, not raw in EDA.</span><span class="edanote ko">RTS/PCN 원천 있음; <code>constraint_type</code>(NEG/POS)는 파이프라인 산출(원천 아님).</span></td>
+        </tr>
+        <tr>
+          <td><code>step_priority_assignment.py</code> <span class="add">ADD</span></td>
+          <td><span class="en">Fixed rule: emergency → delivery → steps → input. Note: month-by-month model order comes from a separate per-(model, month) <b>priority input table</b>.</span><span class="ko">고정 규칙: 긴급→납기→단계→투입. 참고: 월별 모델 순서는 별도의 (모델,월) <b>우선순위 입력 테이블</b>에서 옴.</span></td>
+          <td><span class="en">Generate the priority table from weighted factors (revenue / margin / delivery) per scenario; keep emergency absolute top.</span><span class="ko">시나리오별 가중 요소(매출/마진/납기)로 우선순위 테이블 생성; 긴급은 최상위 유지.</span></td>
+          <td><span class="en">revenue/margin (have); scenario config</span><span class="ko">매출/마진(보유); 시나리오 설정</span></td>
+          <td><span class="eda-p">PARTIAL</span><br><span class="edanote en"><code>sales_price</code> ✓ (43% null); <b>margin not in EDA</b>; priority table is generated.</span><span class="edanote ko"><code>sales_price</code> ✓(43% null); <b>마진 EDA에 없음</b>; 우선순위 테이블은 생성.</span></td>
+        </tr>
+        <tr>
+          <td><code>config.py</code> <span class="fix">FIX</span></td>
+          <td><span class="en">Hardcoded defaults (capa 10 sht, LT 30d, 6/2400/14400); hardcoded blocked/infinite group lists; PNL 분리 marked infinite-capacity.</span><span class="ko">하드코딩 기본값(용량 10시트, LT 30일, 6/2400/14400); 차단/무한 그룹 하드코딩; PNL 분리가 무한용량으로 표기.</span></td>
+          <td><span class="en">Replace defaults with sourced values; validate group lists at Gumi; resolve PNL 분리 conflict with separation rule; add 시제율 + yield + weights config.</span><span class="ko">기본값을 실데이터로 교체; 구미에서 그룹 목록 검증; PNL 분리와 분리규칙 충돌 해소; 시제율 + 수율 + 가중치 설정 추가.</span></td>
+          <td><span class="en">equipment capa, unit conversion (have)</span><span class="ko">설비 용량, 단위변환(보유)</span></td>
+          <td><span class="eda-y">YES</span><br><span class="edanote en">capacity + unit conversion (<code>ea_in_pannel</code> 7.3% null, <code>ea_in_sheet</code> 4.4% null) present.</span><span class="edanote ko">용량 + 단위변환(<code>ea_in_pannel</code> 7.3% null, <code>ea_in_sheet</code> 4.4% null) 있음.</span></td>
+        </tr>
+        <tr>
+          <td><code>net_production_demand.py</code> <span class="have">KEEP</span></td>
+          <td><span class="en">Already subtracts shipped/transit/onhand, rolls forward, excludes 기타매출, has grouping_model fallback + KRW revenue.</span><span class="ko">이미 출하/이동/재고 차감·이월, 기타매출 제외, grouping_model 폴백 + 원화 매출 보유.</span></td>
+          <td><span class="en">Keep. Verify warehouse/적송 field mapping and that WIP-in-progress is netted too.</span><span class="ko">유지. 창고/적송 필드 매핑 및 진행중 WIP도 차감되는지 검증.</span></td>
+          <td><span class="en">revenue plan; available inventory</span><span class="ko">매출계획; 가용재고</span></td>
+          <td><span class="eda-y">YES</span><br><span class="edanote en"><code>이동계획 (Revenue Weekly Plans)</code> (83,271 rows) + onhand/inventory series present.</span><span class="edanote ko"><code>이동계획 (Revenue Weekly Plans)</code>(83,271행) + onhand/재고 시계열 있음.</span></td>
+        </tr>
+        <tr>
+          <td><code>material_depletion · *_risk · uncommitted_demand · unplanned_inventory</code> <span class="have">KEEP</span></td>
+          <td><span class="en">Material depletion, jig/capa risk, uncommitted PO, unplanned inventory, data quality.</span><span class="ko">자재 소진, 지그/용량 리스크, 미수주 PO, 미계획 재고, 데이터 품질.</span></td>
+          <td><span class="en">Keep; wire into risk-by-type output (자재/캐파/제약/ET).</span><span class="ko">유지; 리스크 유형별 출력(자재/캐파/제약/ET)에 연결.</span></td>
+          <td><span class="en">materials/BOM, jig, ERP (have)</span><span class="ko">자재/BOM, 지그, ERP(보유)</span></td>
+          <td><span class="eda-p">PARTIAL</span><br><span class="edanote en">BOM ✓, inventory ✓, ERP/orders ✓; ET-JIG / material master not clearly in EDA.</span><span class="edanote ko">BOM ✓, 재고 ✓, ERP ✓; ET-JIG/자재마스터는 EDA에 불명확.</span></td>
+        </tr>
+        <tr>
+          <td><code>predicted_event_times.py</code> <span class="have">KEEP</span></td>
+          <td><span class="en">Propagates median/Q1/Q3/std times through routing → delivery-date confidence bands. Hardcodes HOLD_RELEASE_DATE = 2025-10-31 as "today".</span><span class="ko">중앙값/Q1/Q3/std 시각을 라우팅에 전파 → 납기 신뢰구간. HOLD_RELEASE_DATE = 2025-10-31을 "오늘"로 하드코딩.</span></td>
+          <td><span class="en">Keep — this is the confidence-band capability. Parametrize the hold-release/"today" date. Still needs historical times (MES) for Q1/median/Q3.</span><span class="ko">유지 — 신뢰구간 기능. hold-release/"오늘" 날짜 파라미터화. Q1/중앙/Q3는 여전히 과거 시각(MES) 필요.</span></td>
+          <td><span class="en">historical process times (MES)</span><span class="ko">과거 공정 시각(MES)</span></td>
+          <td><span class="eda-n">BLOCKED</span><br><span class="edanote en">WIPHISTORY present (1.1M rows) but timestamps = mm:ss → unusable; re-extract.</span><span class="edanote ko">WIPHISTORY 있음(110만행) but 타임스탬프 mm:ss → 사용불가; 재추출.</span></td>
+        </tr>
+        <tr>
+          <td><code>simulation_monthly_fulfillment.py</code> <span class="have">KEEP</span></td>
+          <td><span class="en">Builds monthly demand|fulfilled|shortfall|adjustment (inventory/WIP/new-lots/impossible) at simulation×plan×model×month. Hardcoded dataset RIDs + Foundry output paths.</span><span class="ko">월별 수요|충족|부족|조정(재고/WIP/신규로트/불가)을 시뮬×계획×모델×월 단위로 생성. 데이터셋 RID + Foundry 출력 경로 하드코딩.</span></td>
+          <td><span class="en">Keep as the fulfillment output; repoint RIDs/paths to the new environment; extend to baseline-vs-scenario comparison.</span><span class="ko">충족 출력으로 유지; RID/경로를 새 환경으로 변경; 기준-대-시나리오 비교로 확장.</span></td>
+          <td><span class="en">net revenue plan, allocation events</span><span class="ko">순매출계획, 할당 이벤트</span></td>
+          <td><span class="eda-y">YES</span><br><span class="edanote en">revenue plan ✓; allocation events = engine output (generated).</span><span class="edanote ko">매출계획 ✓; 할당 이벤트는 엔진 출력(생성).</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span> <span class="en">Cross-cutting additions & the big decision</span><span class="ko">공통 추가 항목 & 핵심 결정</span></h2>
+    <div class="callout"><b><span class="en">Paradigm decision (do first):</span><span class="ko">패러다임 결정(우선):</span></b> <span class="en">The engine schedules per equipment-day; 맹준석's foundation is RCCP — LT-spread load into month buckets, compare to CAPA, overflow to next month. Decide whether the core is RCCP load-vs-CAPA (with equipment/mix detail layered) before tuning the scheduler. The meeting leaned RCCP-first ("부하 먼저").</span><span class="ko">엔진은 설비일 단위 스케줄링; 맹준석 책임의 기반은 RCCP — LT로 월별 부하 분산, CAPA 비교, 초과분 익월 이월. 스케줄러 튜닝 전에 코어를 RCCP 부하-대-CAPA(설비/믹스 디테일은 상위 레이어)로 할지 결정. 회의는 RCCP 우선("부하 먼저").</span></div>
+    <ul class="clean">
+      <li><span class="en"><b>Yield</b> — add 투입/타입 yield (none today).</span><span class="ko"><b>수율</b> — 투입/타입 수율 추가(현재 없음).</span></li>
+      <li><span class="en"><b>Panel separation</b> — 0.5 load before the separation step, 1.0 after (실환산수량).</span><span class="ko"><b>판넬 분리</b> — 분리 공정 전 0.5, 후 1.0 부하(실환산수량).</span></li>
+      <li><span class="en"><b>Mix-CAPA</b> — capacity by model×process×차수 for special processes.</span><span class="ko"><b>믹스 CAPA</b> — 특수 공정은 모델×공정×차수 용량.</span></li>
+      <li><span class="en"><b>Lot-size de-평준화</b> — keep 30/30/30/6.</span><span class="ko"><b>로트 크기 평준화 해제</b> — 30/30/30/6 유지.</span></li>
+      <li><span class="en"><b>Tact time</b> — replace the 2-steps/day proxy (needs MES timestamp re-extraction).</span><span class="ko"><b>택타임</b> — 일 2단계 대용치 교체(MES 타임스탬프 재추출 필요).</span></li>
+      <li><span class="en"><b>Scenario weighting</b> + arbitrary what-if variables; baseline vs scenario comparison.</span><span class="ko"><b>시나리오 가중치</b> + 임의 what-if 변수; 기준 대비 시나리오 비교.</span></li>
+      <li><span class="en"><b>Outputs to add</b> — revenue vs target, risk-by-type, bottleneck (WIP&gt;1.5×CAPA), site split. Confidence bands (Q1/median/Q3) are now available via <code>predicted_event_times.py</code>; monthly fulfillment via <code>simulation_monthly_fulfillment.py</code>.</span><span class="ko"><b>추가 출력</b> — 매출 대 목표, 리스크 유형별, 병목(WIP&gt;1.5×CAPA), 사이트 배분. 신뢰구간(Q1/중앙/Q3)은 이제 <code>predicted_event_times.py</code>로 가능; 월별 충족은 <code>simulation_monthly_fulfillment.py</code>로.</span></li>
+      <li><span class="en"><b>Window-time urgency</b> + the three urgent types; weekly bucketing later.</span><span class="ko"><b>윈도우 타임 긴급도</b> + 3가지 긴급 유형; 주 단위는 추후.</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">5</span> <span class="en">Blocked / open</span><span class="ko">차단/미해결</span></h2>
+    <ul class="clean">
+      <li><span class="en"><b>All engine modules now received ✓</b> (incl. <code>predicted_event_times.py</code>, <code>simulation_monthly_fulfillment.py</code>). Remaining work is data + logic, not missing code.</span><span class="ko"><b>전 엔진 모듈 수신 완료 ✓</b>(<code>predicted_event_times.py</code>, <code>simulation_monthly_fulfillment.py</code> 포함). 남은 일은 데이터+로직이며 코드 누락 아님.</span></li>
+      <li><span class="en"><b>Incremental bug risk:</b> <code>create_config_hash</code> omits <code>equipment_capacity_overrides</code> and prototype %, so changing those may NOT trigger reprocessing — include them in the hash.</span><span class="ko"><b>증분 버그 위험:</b> <code>create_config_hash</code>가 <code>equipment_capacity_overrides</code>·시제 비율을 누락 → 변경해도 재처리가 안 될 수 있음. 해시에 포함 필요.</span></li>
+      <li><span class="en">MES timestamps (WIPHISTORY) truncated to mm:ss → blocks tact time; <code>ProductionLot</code> source still 미반입.</span><span class="ko">MES 타임스탬프(WIPHISTORY) mm:ss로 잘림 → 택타임 차단; <code>ProductionLot</code> 소스 미반입.</span></li>
+      <li><span class="en">Is the model×process×차수 mix-CAPA survey machine-readable, and how does it join the capacity check?</span><span class="ko">모델×공정×차수 믹스 CAPA 조사가 기계가독 가능한지, 용량 체크와 어떻게 조인되는지?</span></li>
+      <li><span class="en">Updated 기준 (criteria) 맹준석 will share — what changed vs Palantir?</span><span class="ko">맹준석 책임이 공유할 변경된 기준 — Palantir 대비 무엇이 바뀌었나?</span></li>
+      <li><span class="en">Which scenario variables to expose first (he said 100–200); input by qty vs %?</span><span class="ko">먼저 노출할 시나리오 변수(100~200개 언급); 수량 vs % 입력?</span></li>
+      <li><span class="en">Validate hardcoded blocked/infinite/hold-until equipment lists + column→group map.</span><span class="ko">하드코딩된 차단/무한/목표월대기 설비 목록 + 컬럼→그룹 매핑 검증.</span></li>
+      <li><span class="en">Carryover counts <i>allocated</i> not completed — confirm matches his Excel.</span><span class="ko">이월이 완료가 아닌 <i>할당</i> 기준 — 엑셀과 일치하는지 확인.</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">6</span> <span class="en">Recommended build order</span><span class="ko">권장 구축 순서</span></h2>
+    <ol class="clean">
+      <li><span class="en">Decide RCCP vs equipment-day fidelity; stand up the load-vs-CAPA foundation ("부하 먼저").</span><span class="ko">RCCP vs 설비일 정밀도 결정; 부하-대-CAPA 기반 구축("부하 먼저").</span></li>
+      <li><span class="en">Wire real data into <code>config.py</code> (capacity, unit conversion, lead time, yield).</span><span class="ko"><code>config.py</code>에 실데이터 연결(용량·단위변환·리드타임·수율).</span></li>
+      <li><span class="en">Add yield + panel-separation; fix lot-size 평준화.</span><span class="ko">수율 + 판넬분리 추가; 로트 크기 평준화 수정.</span></li>
+      <li><span class="en">With <code>allocation_helpers.py</code>: add Mix-CAPA + enforce constraints.</span><span class="ko"><code>allocation_helpers.py</code> 확보 후: 믹스 CAPA 추가 + 제약 적용.</span></li>
+      <li><span class="en">Add scenario weighting + comparison + risk-by-type outputs.</span><span class="ko">시나리오 가중치 + 비교 + 리스크 유형별 출력 추가.</span></li>
+      <li><span class="en">Layer ATP / confidence bands (<code>predicted_event_times.py</code> in hand) once historical times (MES) are reliable.</span><span class="ko">과거 시각(MES) 신뢰 확보 후 ATP/신뢰구간(<code>predicted_event_times.py</code> 보유) 레이어 추가.</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2><span class="num">7</span> <span class="en">Data to request (to implement the additions)</span><span class="ko">추가 구현을 위한 데이터 요청 목록</span></h2>
+    <div class="legend">
+      <span><span class="pri-b">BLOCKER</span> <span class="en">stops the build</span><span class="ko">구축 차단</span></span>
+      <span><span class="pri-h">HIGH</span> <span class="en">needed for a core requirement</span><span class="ko">핵심 요건에 필요</span></span>
+      <span><span class="pri-m">MED</span> <span class="en">needed, not on critical path</span><span class="ko">필요하나 임계경로 아님</span></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th><span class="en">Data to request</span><span class="ko">요청 데이터</span></th>
+        <th><span class="en">Needed for</span><span class="ko">필요 목적</span></th>
+        <th><span class="en">Request specifically (vs EDA now)</span><span class="ko">구체 요청(현 EDA 대비)</span></th>
+        <th><span class="en">Source / owner</span><span class="ko">소스/담당</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="pri-b">BLOCKER</span> <span class="en">MES process timestamps</span><span class="ko">MES 공정 타임스탬프</span></td>
+          <td><span class="en">Tact time, process/Q-time, confidence bands (load step 6, predicted_event_times)</span><span class="ko">택타임·공정/Q-time·신뢰구간(부하 6단계, predicted_event_times)</span></td>
+          <td><span class="en">Re-extract <code>WIPHISTORY</code> + 가완공이력 as full ISO datetime — current export is Excel <code>mm:ss</code> (unusable).</span><span class="ko"><code>WIPHISTORY</code> + 가완공이력을 전체 ISO datetime으로 재추출 — 현재는 Excel <code>mm:ss</code>(사용불가).</span></td>
+          <td><span class="en">MES team / 김현</span><span class="ko">MES팀 / 김현</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-b">BLOCKER</span> <span class="en">ProductionLot dataset</span><span class="ko">ProductionLot 데이터셋</span></td>
+          <td><span class="en">WIP Phase-1 allocation; WIP-position net demand</span><span class="ko">WIP 1단계 할당; WIP 위치 기반 순수요</span></td>
+          <td><span class="en">Load the pending source (미반입): lot current step, qty, position.</span><span class="ko">미반입 소스 반입: 로트 현재 단계·수량·위치.</span></td>
+          <td><span class="en">MES / Foundry</span><span class="ko">MES / Foundry</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-h">HIGH</span> <span class="en">Usable yield feed</span><span class="ko">사용 가능한 수율 피드</span></td>
+          <td><span class="en">Yield inflation (load step 4)</span><span class="ko">수율 보정(부하 4단계)</span></td>
+          <td><span class="en">master <code>yield</code> is 98.6% null. Confirm 투입 vs 타입 physical fields; get the 타입수율 standard table (layer×공법); define how future-month yield is filled (실적 is historical only).</span><span class="ko">master <code>yield</code> 98.6% null. 투입 vs 타입 물리 필드 확인; 타입수율 표준표(층수×공법) 확보; 미래월 수율 채우는 방법 정의(실적은 과거만).</span></td>
+          <td><span class="en">개발/생계 eng., FP</span><span class="ko">개발/생계, FP</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-h">HIGH</span> <span class="en">Margin per model/order</span><span class="ko">모델/주문별 마진</span></td>
+          <td><span class="en">Margin-weighted scenario (priority)</span><span class="ko">마진 가중 시나리오(우선순위)</span></td>
+          <td><span class="en"><b>Not in EDA</b> (only <code>sales_price</code>). Request margin, or unit cost to derive it.</span><span class="ko"><b>EDA에 없음</b>(<code>sales_price</code>만). 마진 또는 산출용 단가 요청.</span></td>
+          <td><span class="en">Finance / 회계, ERP</span><span class="ko">회계, ERP</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-h">HIGH</span> <span class="en">Mix-CAPA survey</span><span class="ko">믹스 CAPA 조사</span></td>
+          <td><span class="en">Mix-CAPA (allocation_helpers capacity)</span><span class="ko">믹스 CAPA(allocation_helpers 용량)</span></td>
+          <td><span class="en"><code>CHASU</code>(차수) exists; get the 모델 차수 정보 capacity survey (model×process×차수) as a machine-readable dataset.</span><span class="ko"><code>CHASU</code>(차수)는 있음; 모델 차수 정보 용량 조사(모델×공정×차수)를 기계가독 데이터셋으로 확보.</span></td>
+          <td><span class="en">공정 eng. / 맹준석</span><span class="ko">공정 엔지니어 / 맹준석</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-h">HIGH</span> <span class="en">Prototype ratio (시제율)</span><span class="ko">시제율</span></td>
+          <td><span class="en">Prototype CAPA reservation</span><span class="ko">시제 CAPA 예약</span></td>
+          <td><span class="en">Currently Excel from 개발팀. Request as a feed/dataset: % per process (or overall), adjustable.</span><span class="ko">현재 개발팀 엑셀. 피드/데이터셋으로 요청: 공정별(또는 전체) %, 조정 가능.</span></td>
+          <td><span class="en">개발팀</span><span class="ko">개발팀</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-h">HIGH</span> <span class="en">Panel-separation step flag</span><span class="ko">판넬 분리 단계 플래그</span></td>
+          <td><span class="en">Panel-separation 50/100 (load step 5)</span><span class="ko">판넬 분리 50/100(부하 5단계)</span></td>
+          <td><span class="en">Routing present but no separation flag. Request a per-model flag/lookup marking the separation step, or the detection rule.</span><span class="ko">라우팅은 있으나 분리 플래그 없음. 모델별 분리 단계 표시 플래그/룩업 또는 탐지 규칙 요청.</span></td>
+          <td><span class="en">맹준석 / FP routing</span><span class="ko">맹준석 / FP 라우팅</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-h">HIGH</span> <span class="en">Priority rule / inputs</span><span class="ko">우선순위 규칙/입력</span></td>
+          <td><span class="en">Model priority + scenario weighting</span><span class="ko">모델 우선순위 + 시나리오 가중</span></td>
+          <td><span class="en">Engine expects a per-(model, month) priority table. Get the rule, or the inputs (revenue, margin, customer priority, delivery_rank) + weighting logic.</span><span class="ko">엔진은 (모델,월) 우선순위 테이블을 기대. 규칙 또는 입력(매출·마진·고객우선순위·delivery_rank) + 가중 로직 확보.</span></td>
+          <td><span class="en">SCM / 맹준석</span><span class="ko">SCM / 맹준석</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-m">MED</span> <span class="en">ET-JIG + material master/LT</span><span class="ko">ET-JIG + 자재마스터/LT</span></td>
+          <td><span class="en">Jig-capacity risk, material check</span><span class="ko">지그 용량 리스크, 자재 점검</span></td>
+          <td><span class="en">ET-JIG / material master not clearly in EDA. Request <code>ET_JIG_Information</code> (TT, capa/lot, capa/sheet), material master, vendor lead times, monthly inventory/PO.</span><span class="ko">ET-JIG/자재마스터 EDA에 불명확. <code>ET_JIG_Information</code>(TT, capa/lot, capa/sheet), 자재마스터, 벤더 리드타임, 월별 재고/PO 요청.</span></td>
+          <td><span class="en">설비 / 구매</span><span class="ko">설비 / 구매</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-m">MED</span> <span class="en">Complete grouping mapping</span><span class="ko">완전한 그룹핑 매핑</span></td>
+          <td><span class="en">Grouping aggregation (+ tomorrow's meeting)</span><span class="ko">그룹핑 집계(+내일 회의)</span></td>
+          <td><span class="en"><code>grouping_model</code> is 92.4% null in master. Request the maintained grouping table + blank-fallback rule + grouping criteria.</span><span class="ko">master에서 <code>grouping_model</code> 92.4% null. 관리되는 그룹핑 테이블 + 공란 폴백 규칙 + 그룹핑 기준 요청.</span></td>
+          <td><span class="en">SCM (manual)</span><span class="ko">SCM(수기)</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-m">MED</span> <span class="en">Constraints in usable form</span><span class="ko">사용 가능한 제약</span></td>
+          <td><span class="en">POSITIVE + NEGATIVE enforcement</span><span class="ko">POSITIVE + NEGATIVE 적용</span></td>
+          <td><span class="en">RTS/PCN raw present; <code>constraint_type</code> is derived. Request the constraint dataset (or transform), customer PCN approvals, engineer 가능/불가, + Process Card remark text if to be mined.</span><span class="ko">RTS/PCN 원천 있음; <code>constraint_type</code>는 산출. 제약 데이터셋(또는 변환), 고객 PCN 승인, 엔지니어 가능/불가, 마이닝 시 프로세스카드 리마크 텍스트 요청.</span></td>
+          <td><span class="en">RTS / 맹준석</span><span class="ko">RTS / 맹준석</span></td>
+        </tr>
+        <tr>
+          <td><span class="pri-m">MED</span> <span class="en">Window-time, site ratio, downtime</span><span class="ko">윈도우타임·사이트비율·다운타임</span></td>
+          <td><span class="en">Urgency escalation, site allocation, utilization</span><span class="ko">긴급 승급, 사이트 배분, 가동률</span></td>
+          <td><span class="en">Not in EDA. Request per-process residence-time limits (RTS), engineer site-capacity ratios, equipment downtime logs.</span><span class="ko">EDA에 없음. 공정별 체류시간 한계(RTS), 엔지니어 사이트 용량 비율, 설비 다운타임 로그 요청.</span></td>
+          <td><span class="en">RTS / 생기 / 설비</span><span class="ko">RTS / 생기 / 설비</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="callout"><b><span class="en">Bottom line:</span><span class="ko">핵심:</span></b> <span class="en">most master data exists but is messy; the only true <b>blockers</b> are the MES timestamp re-extraction and the ProductionLot source. Everything else is "request to complete," not "missing entirely."</span><span class="ko">대부분 마스터 데이터는 있으나 정돈 필요; 진짜 <b>차단</b>은 MES 타임스탬프 재추출과 ProductionLot 소스뿐. 나머지는 "완성을 위한 요청"이지 "완전 부재"가 아님.</span></div>
+  </section>
+
+  <footer>FY26 LG이노텍 · Celonis · <span class="en">Sources: ZIP1 engine code (15 modules), 2-2 notebook, 새로운 노트 (2026-06-22 session), MES/OCDM EDA, Foundry extracts.</span><span class="ko">출처: ZIP1 엔진 코드(15개 모듈), 2-2 노트북, 새로운 노트(2026-06-22 세션), MES/OCDM EDA, Foundry 추출본.</span></footer>
+
+</div>
+<script>
+  function setLang(l){
+    document.querySelectorAll('.langbar button').forEach(b=>b.classList.remove('active'));
+    document.getElementById('b-'+l).classList.add('active');
+    var en=(l==='en'||l==='both'), ko=(l==='ko'||l==='both');
+    document.querySelectorAll('.en').forEach(e=>e.style.display=en?'':'none');
+    document.querySelectorAll('.ko').forEach(e=>e.style.display=ko?'':'none');
+  }
+  setLang('both');
+</script>
+</body>
+</html>

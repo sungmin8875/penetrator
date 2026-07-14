@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LG이노텍 SCM 시뮬레이션 — 요약 및 용어집</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f6f9; color: #1d2433; line-height: 1.65; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 40px 28px 80px; }
+  header.hero { background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); color: #fff; border-radius: 16px; padding: 36px 34px; margin-bottom: 32px; box-shadow: 0 10px 30px rgba(30,58,138,.18); }
+  header.hero .kicker { font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; opacity: .85; margin: 0 0 8px; }
+  header.hero h1 { margin: 0 0 10px; font-size: 27px; line-height: 1.3; }
+  header.hero p { margin: 0; font-size: 15px; opacity: .92; max-width: 660px; }
+  .tagbar { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag { background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.25); padding: 4px 12px; border-radius: 999px; font-size: 12.5px; }
+  section { background: #fff; border-radius: 14px; padding: 26px 30px; margin-bottom: 22px; box-shadow: 0 2px 10px rgba(16,24,40,.05); border: 1px solid #eceff4; }
+  h2 { font-size: 20px; margin: 0 0 14px; color: #1e3a8a; display: flex; align-items: center; gap: 10px; }
+  h2 .num { background: #1e3a8a; color: #fff; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+  p { margin: 0 0 14px; }
+  .flow { background: #f1f5fd; border: 1px dashed #b9cdf5; border-radius: 10px; padding: 16px 18px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; color: #1e3a8a; margin: 8px 0 18px; line-height: 1.9; overflow-x: auto; }
+  .callout { border-left: 4px solid #2563eb; background: #f5f8ff; padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .risk { border-left-color: #d97706; background: #fffaf0; }
+  .risk strong { color: #b45309; }
+  .uc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }
+  .uc { border: 1px solid #e5e9f0; border-radius: 12px; padding: 18px 20px; background: #fbfcfe; }
+  .uc .badge { font-size: 12px; font-weight: 600; color: #2563eb; background: #e7efff; padding: 3px 10px; border-radius: 6px; display: inline-block; margin-bottom: 8px; }
+  .uc h4 { margin: 0 0 6px; font-size: 15.5px; color: #0f172a; }
+  .uc .file { font-family: "SF Mono", Menlo, monospace; font-size: 12px; color: #64748b; margin-bottom: 10px; word-break: break-all; }
+  .uc p { font-size: 14px; margin: 0; }
+  table.gloss { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  table.gloss th { text-align: left; background: #1e3a8a; color: #fff; padding: 10px 14px; font-size: 13px; }
+  table.gloss th:first-child { border-radius: 8px 0 0 0; width: 190px; }
+  table.gloss th:last-child { border-radius: 0 8px 0 0; }
+  table.gloss td { padding: 12px 14px; border-bottom: 1px solid #eceff4; font-size: 14px; vertical-align: top; }
+  table.gloss tr:last-child td { border-bottom: none; }
+  table.gloss td:first-child { font-weight: 600; color: #1e3a8a; }
+  table.gloss .en { display: block; font-weight: 400; color: #94a3b8; font-size: 12.5px; margin-top: 2px; }
+  .src { font-size: 12.5px; color: #64748b; margin-top: 8px; font-style: italic; }
+  footer { text-align: center; font-size: 12.5px; color: #94a3b8; margin-top: 30px; }
+  @media (max-width: 640px) { .uc-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="kicker">FY26 · Celonis × LG이노텍</p>
+    <h1>SCM 생산 시뮬레이션 — 개요와 핵심 용어</h1>
+    <p>구미 기판 공장의 생산 능력(CAPA) 시뮬레이션을 쉬운 말로 정리한 요약과, 그 바탕이 되는 제조·공급망 용어 설명입니다.</p>
+    <div class="tagbar">
+      <span class="tag">제조 · 기판 사업부</span>
+      <span class="tag">Oracle ERP</span>
+      <span class="tag">구축(Implementation) 단계</span>
+      <span class="tag">고객: LG이노텍</span>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="num">1</span> 큰 그림</h2>
+    <p>LG이노텍 SCM 팀(기판 사업부, 구미 공장)은 다음 한 가지 핵심 질문에 답하기 위해 <strong>생산 능력(CAPA) 시뮬레이션</strong>을 돌립니다:</p>
+    <div class="callout"><em>"이 생산 계획대로 가면 실제로 만들어 낼 수 있는가 — 그리고 목표 매출을 달성할 수 있는가?"</em></div>
+    <p>현재는 5년 이상 다듬어 온 자체 제작 엑셀 파일로 이 작업을 합니다. 정확하고 신뢰받지만, 수작업이고 느리며 (기밀이라) 공유가 불가능하고, 이동계획이 바뀔 때마다 사람이 직접 다시 돌려야 합니다. 이전 Palantir Foundry PoC는 이를 시스템화하려 했지만 실무에서 거의 쓰이지 못했습니다 — 데이터가 완전히 연결되지 않았고, 일부 로직이 불완전했으며, 실무자가 아니라 경영진 보고용으로 만들어졌기 때문입니다.</p>
+    <p><strong>Celonis 프로젝트의 역할은 이 시뮬레이션을 제대로 다시 구축하는 것</strong>입니다. 실무자가 실제로 사용할 수 있도록 자동 실행, 시나리오 변수, 그리고 구체적인 의사결정으로 이어지는 결과물을 갖추는 것이 목표입니다.</p>
+    <p class="src">출처: 260609_LGI_인터뷰 노트_시뮬레이션 관련(SCM)</p>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span> 실제로 무엇을 계산하는가</h2>
+    <p>본질적으로 이 시뮬레이션은 <strong>부하 대 용량(load vs CAPA) 비교</strong>입니다. 수요 계획을 받아 각 제조 공정 단계의 작업량으로 변환하고, 그 작업이 설비 용량을 초과하는 지점을 찾아냅니다:</p>
+    <div class="flow">
+      이동계획(Move Plan)<br>
+      &nbsp;&nbsp;→ 모델 라우팅(공정 경로) 적용<br>
+      &nbsp;&nbsp;→ 공정별 부하 / 필요량 계산<br>
+      &nbsp;&nbsp;→ 수율 반영<br>
+      &nbsp;&nbsp;→ CAPA와 비교<br>
+      &nbsp;&nbsp;→ 병목 식별<br>
+      &nbsp;&nbsp;→ 필요한 액션 도출
+    </div>
+    <p>부하가 용량을 초과하면 계획자는 다음 중 하나를 결정합니다: 매출(수주)을 줄이거나, 생산성 개선 과제를 만들거나, 투자를 검토하거나, 협력사·공장 간에 작업을 재배치합니다. 핵심은 결과가 단순한 대시보드에 그치지 않고 <strong>후속 액션으로 이어진다</strong>는 점입니다.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span> 폴더에 있는 두 개의 시뮬레이션</h2>
+    <p>인터뷰에서 논의된 두 가지 유즈케이스(Use Case)에 그대로 대응됩니다:</p>
+    <div class="uc-grid">
+      <div class="uc">
+        <span class="badge">UC2-1 · Order Companion</span>
+        <h4>긴급 오더 대응</h4>
+        <div class="file">2-1.긴급_오더_대응.ipynb</div>
+        <p>긴급 주문을 위한 WIP(재공) 로트 할당 알고리즘입니다. 전체 주문의 약 30%가 긴급 주문(매출 기준 약 300)이며, 현재는 약 50%만 수용됩니다. 리드타임이 약 90일인 상황에서 "이미 진행 중인 로트를 고려할 때, 기존 약속을 깨지 않고 이 긴급 주문을 끼워 넣을 수 있는가?"를 묻습니다. 문제의 핵심은 페널티가 아니라, 주문을 거절할 때 발생하는 매출 손실과 시장 점유율 상실입니다.</p>
+      </div>
+      <div class="uc">
+        <span class="badge">UC2-2 · RevPlan Optimizer</span>
+        <h4>시나리오 베이스 시뮬레이션</h4>
+        <div class="file">2-2.시나리오_베이스_시뮬레이션.ipynb</div>
+        <p>더 큰 엔진으로, <strong>수익 기반 용량 할당 엔진</strong>(Revenue-Driven Allocation Engine)입니다. 각 생산 단계에 대해 <em>언제</em> 수행할지, <em>어느 설비</em>에서 할지, 그리고 수요 부족분을 채우기 위해 <em>얼마나</em>의 신규 생산(가상 로트, Virtual Lot)을 만들지 결정합니다. 월 단위로(202602 → 202603 → …) 처리하며, 각 월 안에서 모델 우선순위에 따라 용량을 할당하고, 충족하지 못한 수요는 다음 달로 이월합니다.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span> 시뮬레이션이 반드시 지켜야 할 제약</h2>
+    <p>이 시뮬레이션은 단순 합산이 아닙니다 — SCM 팀이 강조한 여러 현실 규칙을 반영해야 합니다: <strong>그룹핑 모델</strong>(유사한 모델을 묶고, 신규 모델은 평균/중앙값을 사용), <strong>믹스 CAPA</strong>(특수 공정의 실제 처리량은 함께 돌아가는 모델 믹스에 따라 달라짐), <strong>시제품 CAPA 예약</strong>(전체 용량의 약 10~20%를 시제품용으로 확보 — 조정 가능한 변수), <strong>설비 제약</strong>(특정 모델에 대해 막혀 있는 설비 존재), 그리고 <strong>복합 우선순위</strong>(매출이 최우선 KPI이지만, 시기에 따라 자재 가용성·리드타임·마진·고객 우선순위가 모두 중요).</p>
+  </section>
+
+  <section>
+    <h2><span class="num">5</span> 지향하는 모습</h2>
+    <p>목표는 새로운 이동계획이나 사업계획이 나올 때마다 <strong>자동으로 실행</strong>되는 것입니다(수작업 재실행 없음). 단기 이동계획(매출 달성)과 장기 사업계획(투자 / CAPA 의사결정)을 모두 입력으로 삼아, 1년 이상의 기간을 대상으로, 사용자가 조정할 수 있는 시나리오 변수와 함께 돌립니다. 결과물은 구체적인 후속 액션으로 이어져야 하며(그래프, 요약 대시보드, 엑셀 추출), 그 위에 AI를 얹는 것에 대한 기대도 있습니다 — 유사 그룹핑 모델 추천, 새로운 상황에 대한 대응 제안, 코파일럿(copilot) 형태의 어시스턴트 등.</p>
+    <div class="callout risk">
+      <strong>⚠ 알려진 리스크:</strong> 신뢰받는 엑셀 로직은 (기밀이라) <strong>공유받지 못했고</strong>, 인터뷰 노트는 실제 로직 파악을 위해 <strong>구미 공장 방문이 필요</strong>하다고 명시합니다. 따라서 현재 노트북들은 <em>검증된 엑셀 로직이 아니라</em> 재구성된 Palantir 로직을 반영합니다. 정확성을 평가할 때 이 격차를 열린 리스크로 다뤄야 합니다.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">6</span> 용어집 — 제조 &amp; SCM 용어</h2>
+    <p>노트북과 인터뷰 노트 전반에서 반복해서 마주치게 될 용어들입니다:</p>
+    <table class="gloss">
+      <thead><tr><th>용어</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td>CAPA (캐파)<span class="en">Capacity</span></td><td>한 공정 또는 설비가 주어진 기간에 생산할 수 있는 최대량(예: 하루 시트 수). 시뮬레이션의 핵심 역할은 계획된 수요가 CAPA <em>안에 들어가는지</em> 확인하는 것입니다. 수요 &gt; CAPA이면 병목이 발생합니다.</td></tr>
+        <tr><td>그룹핑 모델<span class="en">Grouping Model</span></td><td>개별 제품 모델을 하나하나 시뮬레이션하는 대신(모델이 너무 많고 신규 모델이 계속 생김), 유사한 라우팅·공정 특성을 가진 모델을 묶어 평균/가정값으로 그룹 단위로 시뮬레이션합니다. 신규 모델은 가장 가까운 기존 그룹의 기본값(예: 중앙값 리드타임)을 물려받습니다. 약간의 정밀도를 내주는 대신 실용적이고 유지 가능한 모델을 얻습니다.</td></tr>
+        <tr><td>믹스 CAPA<span class="en">Mix CAPA</span></td><td>특수 공정에서는 실제 처리량이 고정된 숫자가 아니라 <em>어떤 모델들이 어떤 비율로 함께 돌아가는지</em>에 따라 달라집니다. 같은 설비라도 A 모델은 더 많이, B 모델은 더 적게 처리할 수 있습니다. 따라서 용량을 단일 표준 속도가 아니라 모델 믹스로부터 계산해야 합니다.</td></tr>
+        <tr><td>로트<span class="en">Lot</span></td><td>제조 공정을 함께 거치는 제품 배치(batch). 시뮬레이션이 스케줄링하고 추적하는 기본 단위입니다.</td></tr>
+        <tr><td>WIP (재공)<span class="en">Work In Progress</span></td><td>이미 라인에서 진행 중인 로트 — 부분적으로 완료된 작업입니다. 긴급 오더 엔진(UC2-1)은 신규 주문을 기존 약속을 깨지 않고 수용할 수 있는지 보기 위해 WIP에 대해 할당을 수행합니다.</td></tr>
+        <tr><td>가상 로트<span class="en">Virtual Lot</span></td><td>수요 부족분을 채우기 위해 엔진이 만들어 내는 "가정(what-if)" 로트입니다. 아직 라인에 실재하지 않으며, 계획을 충족하기 위해 필요한 신규 생산을 시뮬레이션이 제안하는 것입니다.</td></tr>
+        <tr><td>공정 단계<span class="en">Process Step</span></td><td>제조 순서상의 단일 작업(예: 드릴링, AOI 검사). 한 모델의 전체 단계 시퀀스가 곧 라우팅입니다.</td></tr>
+        <tr><td>라우팅<span class="en">Routing</span></td><td>특정 모델을 만들기 위해 반드시 거쳐야 하는 공정 단계의 정의된 순서입니다. 시뮬레이션은 모델의 라우팅을 적용해 수요를 단계별 작업량으로 변환합니다.</td></tr>
+        <tr><td>설비 그룹<span class="en">Equipment Group</span></td><td>동일한 작업을 수행할 수 있는 설비들의 집합입니다. 공정 단계는 고정된 한 설비가 아니라 설비 그룹에 할당되어, 엔진에 유연성을 줍니다.</td></tr>
+        <tr><td>수율<span class="en">Yield</span></td><td>투입량 중 양품으로 나오는 비율(나머지는 불량/재작업). 시뮬레이션은 수율을 반영하므로, N개의 양품을 출하하려면 N개보다 많이 투입해야 하고 — 이로 인해 각 공정의 실제 부하가 커집니다.</td></tr>
+        <tr><td>리드타임<span class="en">Lead Time</span></td><td>제품을 처음부터 끝까지 생산하는 데 걸리는 총 시간입니다. LG이노텍에서는 약 90일, 길게는 4개월이 넘기도 하며 — 바로 그렇기 때문에 사전에 용량을 시뮬레이션하는 것이 중요합니다.</td></tr>
+        <tr><td>이동계획<span class="en">Move Plan</span></td><td>매출 달성을 위한 단기 생산/출하 계획입니다. 주요 실행 트리거로, 팀은 이동계획이 바뀔 때마다 시뮬레이션이 자동 실행되기를 원합니다.</td></tr>
+        <tr><td>사업계획<span class="en">Business Plan</span></td><td>투자 및 용량 의사결정(그리고 투자 유치)을 위한 장기 계획입니다. 다음 해를 위해 대략 7~8월부터 계속 리비전됩니다. 팀은 이것도 시뮬레이션에 반영되기를 원합니다.</td></tr>
+        <tr><td>시제품 CAPA<span class="en">Prototype CAPA</span></td><td>양산 CAPA와 별도로, 시제품/샘플 생산을 위해 떼어 두는 용량(예: 10~20%)입니다. 예약 비율은 조정 가능하므로 시뮬레이션 변수로 다룹니다. 엑셀에는 부하분석의 "시제 반영"과 "시제 미반영" 버전이 있었습니다.</td></tr>
+        <tr><td>순수요<span class="en">Net Demand</span></td><td>모델별·월별로 필요한 순(net) 생산 수량 — 부족분에 대해 가상 로트를 만들기 전에 엔진이 충족하려는 수요입니다.</td></tr>
+        <tr><td>이월<span class="en">Carryover</span></td><td>이번 달에 충족하지 못한 수요가 다음 달로 넘어가는 것입니다. 엔진의 중요한 뉘앙스: 이월은 정시 완료가 아니라 <em>할당(스케줄)된</em> 수량을 기준으로 셉니다 — 로트가 일단 스케줄되면 그 수요는 충족된 것으로 간주되어, 이미 커버된 수요에 대해 중복 로트가 생성되는 것을 방지합니다.</td></tr>
+        <tr><td>목표월<span class="en">Target Month</span></td><td>해당 수요가 충족되어야 하는 목표 월입니다. 최종 "출하 준비" 단계는 목표월까지 대기시킬 수 있어, 공장이 너무 일찍 납품하지 않도록 합니다.</td></tr>
+        <tr><td>할당<span class="en">Allocation</span></td><td>로트의 공정 단계를 특정 날짜와 특정 설비에 배정하는 것입니다. UC2-2 엔진은 본질적으로 할당 엔진입니다.</td></tr>
+        <tr><td>패스트트랙<span class="en">Fast-track</span></td><td>고우선순위 모델이 하루에 더 많은 공정 단계를 처리할 수 있게 하는 메커니즘입니다(예: 일반 2단계 대신 최대 5단계). 긴급·중요 수요가 더 빨리 흘러가도록 합니다.</td></tr>
+        <tr><td>병목<span class="en">Bottleneck</span></td><td>필요 부하가 용량을 초과하는 공정 또는 설비 — 전체 산출을 제약하고 의사결정(수요 축소, 용량 증설, 투자, 재배치)을 촉발하는 제약 지점입니다.</td></tr>
+        <tr><td>OTD (납기준수율)<span class="en">On-Time Delivery</span></td><td>주문을 약속한 납기일까지 납품하는 비율 — RevPlan 유즈케이스에서 제기된 핵심 공급망 KPI입니다.</td></tr>
+        <tr><td>단위 변환<span class="en">PNL·SHT·STR·EA</span></td><td>기판 수량은 여러 중첩 단위로 추적되며 서로 변환됩니다. 노트북의 위계는 <strong>시트(Sheets) &gt; 패널(Panels) &gt; 유닛(Units)</strong>이며, 인터뷰에서는 PNL(패널) &gt; SHT(시트) &gt; STR &gt; EA(개)도 언급됩니다. 수요와 용량을 비교하려면 먼저 공통 단위로 변환해야 합니다.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>FY26 LG이노텍 Celonis 프로젝트용 자료 · 출처: 2-1 &amp; 2-2 시뮬레이션 노트북, 2026-06-09 SCM 시뮬레이션 인터뷰 노트.</footer>
+
+</div>
+</body>
+</html>

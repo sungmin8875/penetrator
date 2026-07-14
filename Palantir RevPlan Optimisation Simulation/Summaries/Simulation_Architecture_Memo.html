@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture Memo — Consolidating the SCM Simulation</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"Apple SD Gothic Neo","Malgun Gothic",sans-serif; background:#f5f6f8; color:#1c2330; line-height:1.65; }
+  .wrap { max-width:880px; margin:0 auto; padding:44px 30px 90px; }
+  .doc { background:#fff; border:1px solid #e6e9ee; border-radius:14px; padding:46px 52px; box-shadow:0 2px 14px rgba(16,24,40,.05); }
+  .memo-head { border-bottom:2px solid #1a2b4a; padding-bottom:18px; margin-bottom:26px; }
+  .memo-head .eyebrow { font-size:12px; letter-spacing:1.8px; text-transform:uppercase; color:#5b6675; margin:0 0 6px; }
+  .memo-head h1 { font-size:25px; margin:0 0 14px; color:#1a2b4a; line-height:1.25; }
+  .meta { font-size:13px; color:#5b6675; }
+  .meta b { color:#1c2330; }
+  h2 { font-size:18px; color:#1a2b4a; margin:30px 0 10px; padding-top:6px; }
+  h3 { font-size:15px; color:#2a3242; margin:20px 0 6px; }
+  p { margin:0 0 13px; }
+  .tldr { background:#eef4ff; border:1px solid #cfe0ff; border-left:4px solid #2563eb; border-radius:0 10px 10px 0; padding:18px 22px; margin:0 0 8px; }
+  .tldr h2 { margin:0 0 8px; color:#1d4ed8; font-size:16px; }
+  .tldr p { margin:0; font-size:14.5px; }
+  ul { margin:6px 0 14px; padding-left:22px; }
+  li { margin-bottom:7px; }
+  table { width:100%; border-collapse:collapse; margin:14px 0 18px; font-size:13.5px; }
+  th,td { text-align:left; padding:9px 11px; border:1px solid #e6e9ee; vertical-align:top; }
+  th { background:#1a2b4a; color:#fff; font-weight:600; }
+  td:first-child { font-weight:600; color:#1a2b4a; width:200px; }
+  .yes { color:#15803d; font-weight:600; }
+  .no { color:#b91c1c; font-weight:600; }
+  .partial { color:#b45309; font-weight:600; }
+  tr:nth-child(even) td { background:#fafbfc; }
+  .flag { background:#fff7ed; border:1px solid #fed7aa; border-left:4px solid #ea580c; border-radius:0 9px 9px 0; padding:13px 18px; margin:14px 0; font-size:14px; }
+  .flag b { color:#9a3412; }
+  .arch { background:#f0faf5; border:1px dashed #9bd9bb; border-radius:10px; padding:16px 20px; font-size:13.5px; margin:12px 0; }
+  .arch ol { margin:6px 0 0; padding-left:20px; }
+  .arch li { margin-bottom:8px; }
+  .arch .lbl { font-weight:700; color:#0f3d2e; }
+  footer { text-align:center; font-size:12px; color:#9aa3b0; margin-top:28px; }
+  @media print { body{background:#fff;} .doc{box-shadow:none; border:none; padding:0;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="doc">
+
+  <div class="memo-head">
+    <p class="eyebrow">Architecture Memo · Internal</p>
+    <h1>Consolidate the SCM Simulation into One Engine</h1>
+    <div class="meta">
+      <b>Project:</b> FY26 LG Innotek — Celonis Process Mining (Manufacturing / Substrate BU)<br>
+      <b>Re:</b> Relationship between UC2-1 (Urgent Order Response) and UC2-2 (Scenario-Based Simulation)<br>
+      <b>Date:</b> 2026-06-20 &nbsp;·&nbsp; <b>Status:</b> Recommendation for review ahead of the Gumi site visit
+    </div>
+  </div>
+
+  <div class="tldr">
+    <h2>Recommendation</h2>
+    <p>Stop treating UC2-1 and UC2-2 as two systems. They are one problem — capacity-constrained, revenue-prioritized production scheduling — at different settings. An urgent order is just a high-priority demand item inside the UC2-2 engine. Build and validate <b>one</b> engine; carry over the two genuinely useful pieces of UC2-1 (confidence bands and fine-grained timing) as features. This reduces scope, removes duplicate logic, and fixes a correctness gap UC2-1 cannot fix on its own.</p>
+  </div>
+
+  <h2>1. Background</h2>
+  <p>Two notebooks were inherited from the Palantir POC and reconstructed: <b>2-1 (긴급 오더 대응 / Urgent Order Response)</b> and <b>2-2 (시나리오 베이스 시뮬레이션 / Scenario-Based Simulation)</b>. They are currently framed as separate use cases. The 2026-06-09 SCM interview, however, describes a single underlying need: take a plan (Move Plan / 이동계획 or Business Plan / 사업계획), translate it through model routing into per-process load, apply yield, compare against capacity (CAPA), find bottlenecks, and drive an action — with revenue (매출) as the primary KPI. This memo assesses how the two notebooks relate to that need and recommends consolidation.</p>
+
+  <h2>2. What each notebook actually does</h2>
+  <h3>2-1 — Urgent Order Response</h3>
+  <p>Two components. First, a <b>forward-timing simulator</b> (TypeScript / Foundry OSDK): given one order, it splits the quantity into lots, loads the routing, and propagates time forward using historical per-panel process times at Q1 / median / Q3 / standard percentiles plus inter-process waits, producing a delivery date with a confidence band. Second, a <b>greedy WIP-to-order allocator</b> (implemented Python): sort open orders by promise date, sort WIP lots by predicted finish, match by grouping_model → model_id, fill earliest orders first with earliest-finishing lots.</p>
+  <div class="flag"><b>2-1 documents its own fatal limitation.</b> It states the forward simulator "computes timing in isolation" and explicitly does <b>not</b> account for other WIP competing for the same equipment, real-time queues, or dynamic waits. Its own stated "next step" is a capacity-aware simulation that loads all WIP and inserts the urgent lot into the real queue by priority — which is precisely what 2-2 is.</p></div>
+
+  <h3>2-2 — Scenario-Based Simulation (Revenue-Driven Allocation Engine)</h3>
+  <p>A month-by-month engine over a long horizon (start 202602, out to 2027). For each month, for each model in revenue/priority order: compute total demand (base + carryover); Phase 1 allocate existing WIP lots; Phase 2 create Virtual Lots for the shortfall; schedule each routing step onto the least-loaded eligible equipment within daily sheet capacity, honoring blocked equipment, infinite-capacity groups, hold-until-target-month, and fast-track for high-priority lots; carry unmet demand forward.</p>
+  <div class="flag"><b>Current-state caveat.</b> In the uploaded notebook, 2-2's core scheduling functions (<code>allocate_month_by_month</code>, <code>find_least_loaded_equipment_for_process</code>) are <b>pseudocode in docstrings</b>; only the config and data structures are implemented. The runnable engine lives in separate refactored .py modules. By contrast, 2-1's allocator is fully coded and runs. "Consolidate into 2-2" therefore means <b>finishing 2-2</b>, not merely retiring 2-1.</p></div>
+
+  <h2>3. Why 2-2 subsumes 2-1</h2>
+  <ul>
+    <li><b>The urgent order is a parameter, not a use case.</b> It enters the engine as a high-priority demand row (low priority number, high revenue, early target date, the existing <code>emergencyLotFlag</code>). No separate pipeline is required.</li>
+    <li><b>2-2 already contains 2-1's allocation.</b> Phase 1 (allocate existing WIP to demand) is exactly what 2-1's allocator does — but 2-2 does it against real equipment capacity contention, the gap 2-1 admits.</li>
+    <li><b>Fast-track exists for this.</b> 2-2's fast-track lane (more steps/day for high-priority lots) is purpose-built for urgent demand.</li>
+    <li><b>2-2 answers a strictly larger question.</b> Not just "can we hit the promise date?" but "…given everything else on the floor, and what does accepting this displace?" — which 2-1 structurally cannot.</li>
+  </ul>
+
+  <h2>4. Capability comparison</h2>
+  <table>
+    <tr><th>Capability</th><th>2-1</th><th>2-2</th><th>Unified target</th></tr>
+    <tr><td>WIP → demand allocation</td><td class="yes">Yes</td><td class="yes">Yes (Phase 1)</td><td class="yes">Keep (2-2)</td></tr>
+    <tr><td>Real equipment capacity contention</td><td class="no">No (admitted)</td><td class="yes">Yes</td><td class="yes">Keep (2-2)</td></tr>
+    <tr><td>Virtual lots for shortfall</td><td class="partial">Partial (lot split)</td><td class="yes">Yes (Phase 2)</td><td class="yes">Keep (2-2)</td></tr>
+    <tr><td>Long horizon + monthly carryover</td><td class="no">No (single order)</td><td class="yes">Yes</td><td class="yes">Keep (2-2)</td></tr>
+    <tr><td>Revenue-based prioritization</td><td class="partial">Promise date only</td><td class="yes">Yes</td><td class="yes">Keep (2-2)</td></tr>
+    <tr><td>Confidence bands (Q1/median/Q3)</td><td class="yes">Yes</td><td class="no">No (deterministic)</td><td class="partial">Port from 2-1</td></tr>
+    <tr><td>Fine-grained (hour-level) timing</td><td class="yes">Yes</td><td class="partial">Day/capacity granularity</td><td class="partial">Port from 2-1</td></tr>
+    <tr><td>Grouping-model matching</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Keep</td></tr>
+    <tr><td>Engine actually implemented?</td><td class="yes">Yes (runs)</td><td class="no">Pseudocode in NB</td><td class="partial">Finish 2-2</td></tr>
+  </table>
+
+  <h2>5. Gaps vs the real (interview) problem — apply to the unified engine</h2>
+  <p>Neither notebook yet covers several things the SCM team called out. These are the priorities for the Gumi visit, not the merge itself:</p>
+  <ul>
+    <li><b>Yield (수율):</b> not modeled. The interview makes it central — to ship N you must start more than N, raising real load per process.</li>
+    <li><b>Mix CAPA:</b> 2-2 uses a flat daily-sheets capacity per equipment group and picks the least-loaded machine (load-balancing). The Excel computes capacity as a function of the model mix for special processes. This is a structural difference, not a parameter.</li>
+    <li><b>Material constraints:</b> global shortages were named a top factor; not represented.</li>
+    <li><b>Prototype CAPA reservation (시제):</b> reserve ~10–20% of capacity, adjustable; not represented.</li>
+    <li><b>Margin vs revenue:</b> engine optimizes on revenue only; margin/mix optimization not available.</li>
+    <li><b>Over-capacity "what do we drop" decision:</b> currently greedy-by-priority — the one place a small optimizer would measurably help (see §6).</li>
+  </ul>
+
+  <h2>6. Algorithm direction</h2>
+  <p>Keep the <b>greedy allocation engine as the explainable, fast backbone</b> — it matches the planners' mental model and survives messy data, and adoption (not optimality) is what killed the Palantir version. Add targeted optimization only where greedy demonstrably leaves value on the table:</p>
+  <ul>
+    <li><b>Selection at full capacity</b> (which demand to accept) is a knapsack/product-mix problem. Model it as an <b>LP/MILP</b> on the bounded, contested-capacity decision to get a provably revenue/margin-optimal mix, then let greedy build the explainable schedule that realizes it.</li>
+    <li><b>Uncertainty:</b> wrap the deterministic engine in a <b>Monte Carlo</b> loop over yield/demand to produce the confidence bands — reusing 2-1's percentile data.</li>
+  </ul>
+
+  <h2>7. Recommended architecture</h2>
+  <div class="arch">
+    <ol>
+      <li><span class="lbl">One demand intake</span> — Move Plan, Business Plan, and urgent orders all become prioritized demand rows (urgent = high priority + emergency flag).</li>
+      <li><span class="lbl">Greedy allocation engine (core)</span> — month-by-month, revenue-priority, Phase 1 WIP + Phase 2 virtual lots, scheduled against real capacity. This is the finished 2-2.</li>
+      <li><span class="lbl">Optimizer module (optional)</span> — LP/MILP for the over-capacity accept/reject decision when best-mix matters.</li>
+      <li><span class="lbl">Uncertainty wrapper (optional)</span> — Monte Carlo for best/likely/worst delivery dates (from 2-1).</li>
+      <li><span class="lbl">Outputs</span> — allocation, bottlenecks, failed/unrouted demand, delivery dates with bands; dashboard + Excel export; auto-runs on each plan change.</li>
+    </ol>
+  </div>
+  <p>"Optimize the policy, then simulate it": optimization sets the high-level mix; greedy produces the auditable schedule planners will trust.</p>
+
+  <h2>8. Open questions for Gumi (decision-driving)</h2>
+  <ul>
+    <li>Do they conceptually treat urgent orders as a separate process, or the same simulation with priority raised? (Validates the merge.)</li>
+    <li>For urgent orders, do they need the displacement impact on other orders, or only feasibility?</li>
+    <li>Do they commit a single delivery date or a range? How precise — day-level or "this week"? (Decides whether to port confidence bands / fine timing.)</li>
+    <li>Exact drop rule at full CAPA, Mix CAPA formula, yield application, prototype reservation, tie-breaking. (Covered in the prep sheet question bank.)</li>
+  </ul>
+
+  <h2>9. Risks</h2>
+  <ul>
+    <li><b>Reconstruction ≠ validated logic.</b> The notebooks encode Palantir's interpretation, not the trusted Excel. Treat as a hypothesis until the Gumi visit.</li>
+    <li><b>Unfinished core.</b> The 2-2 engine is partly pseudocode in the notebook; effort to "finish 2-2" must be scoped, not assumed done.</li>
+    <li><b>Structural gaps (yield, mix CAPA, materials)</b> may require model changes, not just config — confirm before estimating.</li>
+  </ul>
+
+  <footer>FY26 LG Innotek · Celonis · Internal architecture memo · Sources: 2-1 &amp; 2-2 notebooks (uploaded), 2026-06-09 SCM simulation interview note.</footer>
+
+</div>
+</div>
+</body>
+</html>

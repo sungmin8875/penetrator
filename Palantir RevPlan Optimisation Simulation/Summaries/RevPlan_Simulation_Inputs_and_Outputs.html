@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RevPlan Simulation — Input &amp; Output Variables</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#5b6472; --line:#e4e7ec; --paper:#ffffff; --bg:#f4f5f7;
+    --indigo:#3b3f8f; --indigo-soft:#eef0fb;
+    --green:#1b7a4b; --green-bg:#e7f5ee;
+    --amber:#9a6700; --amber-bg:#fdf3e2;
+    --teal:#0f6e78; --teal-bg:#e3f4f5;
+    --code:#f3f4f6;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+    line-height:1.55; font-size:15px;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:48px 28px 80px;}
+  header.masthead{border-bottom:3px solid var(--indigo); padding-bottom:22px; margin-bottom:34px;}
+  .eyebrow{font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--indigo); font-weight:700;}
+  h1{font-size:30px; line-height:1.2; margin:8px 0 6px; letter-spacing:-.01em;}
+  .sub{color:var(--muted); font-size:15px; max-width:780px;}
+  .meta{margin-top:14px; font-size:12.5px; color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 22px;}
+  .meta b{color:var(--ink); font-weight:600;}
+
+  section{background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:26px 28px; margin-bottom:22px;}
+  .band{display:flex; align-items:center; gap:12px; margin:0 0 4px;}
+  .chip{font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:4px 11px; border-radius:999px;}
+  .chip.in{background:var(--indigo-soft); color:var(--indigo);}
+  .chip.out{background:var(--teal-bg); color:var(--teal);}
+  h2{font-size:21px; margin:0; letter-spacing:-.01em;}
+  .lead{color:var(--muted); margin:6px 0 18px; font-size:14.5px;}
+  h3{font-size:14px; margin:24px 0 9px; color:var(--indigo); text-transform:uppercase; letter-spacing:.05em; font-weight:700;}
+  h3.first{margin-top:6px;}
+  h3.teal{color:var(--teal);}
+
+  /* summary band */
+  .summary{background:linear-gradient(180deg,#fbfbfe,#f6f7fd); border-color:#d9dcf0;}
+  .stats{display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin:6px 0 4px;}
+  .stat{border:1px solid var(--line); border-radius:10px; padding:14px 12px; background:#fff; text-align:center;}
+  .stat .n{font-size:25px; font-weight:750; line-height:1; font-variant-numeric:tabular-nums;}
+  .stat .l{font-size:11.5px; color:var(--muted); margin-top:6px; line-height:1.3;}
+  .stat.a .n{color:var(--indigo);} .stat.b .n{color:var(--indigo);} .stat.c .n{color:var(--indigo);}
+  .stat.d .n{color:var(--teal);} .stat.e .n{color:var(--teal);}
+
+  table{width:100%; border-collapse:collapse; margin:4px 0; font-size:13.5px;}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top;}
+  thead th{background:var(--indigo-soft); color:var(--indigo); font-size:11px; letter-spacing:.04em; text-transform:uppercase; border-bottom:1px solid #d9dcf0;}
+  .out-tbl thead th{background:var(--teal-bg); color:var(--teal); border-bottom:1px solid #c7e4e6;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:hover{background:#fafbff;}
+  td.var{font-weight:600; white-space:nowrap;}
+  td.def{white-space:nowrap; font-variant-numeric:tabular-nums;}
+  code{background:var(--code); border:1px solid var(--line); border-radius:5px; padding:1px 5px; font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:12px; color:#27324a;}
+  .def code{background:var(--amber-bg); border-color:#f1dcb0; color:var(--amber); font-weight:700;}
+
+  .note{border-radius:10px; padding:13px 16px; margin:16px 0 2px; font-size:13.6px; background:var(--indigo-soft); border:1px solid #d9dcf0;}
+  .note b{color:var(--indigo);}
+  .note.t{background:var(--teal-bg); border-color:#c7e4e6;} .note.t b{color:var(--teal);}
+
+  /* output theme blocks */
+  .theme{border:1px solid var(--line); border-radius:10px; padding:15px 17px; margin-bottom:12px; background:#fff;}
+  .theme .head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:9px;}
+  .theme .idx{flex:0 0 24px; height:24px; border-radius:6px; background:var(--teal); color:#fff; font-weight:700; font-size:12px; display:inline-flex; align-items:center; justify-content:center;}
+  .theme .ttl{font-weight:700; font-size:15px;}
+  .theme .ds{font-size:12px; color:var(--muted);}
+  .theme.headline{border-color:#bfe2e4; background:linear-gradient(180deg,#fbfeff,#f2fafa); box-shadow:inset 3px 0 0 var(--teal);}
+  .pillrow{display:flex; flex-wrap:wrap; gap:7px;}
+  .pill{font-size:12.3px; background:#f7f8fa; border:1px solid var(--line); border-radius:7px; padding:5px 9px;}
+  .pill b{color:var(--ink);}
+  .pill .d{color:var(--muted);}
+
+  footer{color:var(--muted); font-size:12px; margin-top:30px; text-align:center; line-height:1.7;}
+  footer code{font-size:11px;}
+  @media (max-width:720px){
+    .stats{grid-template-columns:repeat(2,1fr);}
+    .wrap{padding:28px 16px 60px;}
+    table{font-size:12.5px;} td.var{white-space:normal;}
+  }
+  @media print{ body{background:#fff;} section,.theme{break-inside:avoid;} .wrap{max-width:none;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">FY26 · LG Innotek · RevPlan Optimisation Simulation</div>
+    <h1>Simulation Input &amp; Output Variables</h1>
+    <p class="sub">The tuning parameters a user sets when starting a RevPlan allocation simulation, and the result variables the engine returns when the run completes.</p>
+    <div class="meta">
+      <span><b>Inputs:</b> <code>simulation_config</code> scenario row (defaults from <code>config.py</code>)</span>
+      <span><b>Outputs:</b> allocation engine result datasets</span>
+      <span><b>Date:</b> 2026-06-29</span>
+    </div>
+  </header>
+
+  <section class="summary">
+    <h2>At a glance</h2>
+    <p class="lead">Set a scenario with the parameters on the left; read the results on the right.</p>
+    <div class="stats">
+      <div class="stat a"><div class="n">6</div><div class="l">Input parameter groups</div></div>
+      <div class="stat b"><div class="n">~14</div><div class="l">Control levers</div></div>
+      <div class="stat c"><div class="n">21</div><div class="l">Equipment capacity knobs</div></div>
+      <div class="stat d"><div class="n">8</div><div class="l">Result themes</div></div>
+      <div class="stat e"><div class="n">12+</div><div class="l">Output datasets</div></div>
+    </div>
+  </section>
+
+  <!-- ================= INPUTS ================= -->
+  <section>
+    <div class="band"><span class="chip in">Input</span><h2>Tuning parameters set by the user</h2></div>
+    <p class="lead">Fields of the <code>simulation_config</code> scenario row. Defaults shown are from <code>config.py</code> and apply when a value is left unset.</p>
+
+    <h3 class="first">Scenario identity</h3>
+    <table>
+      <thead><tr><th>Variable</th><th>Default</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr><td class="var">config_name</td><td class="def">—</td><td>Name of the scenario</td></tr>
+        <tr><td class="var">revenue_plan_id</td><td class="def">—</td><td>Which revenue plan the simulation runs against</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Timing &amp; horizon</h3>
+    <table>
+      <thead><tr><th>Variable</th><th>Default</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr><td class="var">start_month</td><td class="def"><code>202602</code></td><td>First month the engine allocates (earlier months skipped)</td></tr>
+        <tr><td class="var">effective_start_date</td><td class="def">run date</td><td>Simulation clock start date</td></tr>
+        <tr><td class="var">max_allocation_year</td><td class="def"><code>2027</code></td><td>Stop allocating beyond this year (planning horizon)</td></tr>
+        <tr><td class="var">max_delay_days</td><td class="def"><code>200</code></td><td>Days to search for capacity before a step is declared failed</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Demand &amp; throughput</h3>
+    <table>
+      <thead><tr><th>Variable</th><th>Default</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr><td class="var">demand_fulfillment_buffer</td><td class="def"><code>1.1</code></td><td>Build enough lots to make 110% of demand</td></tr>
+        <tr><td class="var">max_steps_per_lot_per_day</td><td class="def"><code>2</code></td><td>Normal throughput limit per lot</td></tr>
+        <tr><td class="var">max_steps_per_lot_per_day_fast_track</td><td class="def"><code>5</code></td><td>Throughput limit for fast-tracked lots</td></tr>
+        <tr><td class="var">fast_track_lots_per_day</td><td class="def"><code>200</code></td><td>Max lots that can be fast-tracked per day</td></tr>
+        <tr><td class="var">fast_track_priority_threshold</td><td class="def"><code>10000</code></td><td>Lots with priority ≤ this are fast-track eligible</td></tr>
+      </tbody>
+    </table>
+
+    <h3>WIP handling</h3>
+    <table>
+      <thead><tr><th>Variable</th><th>Default</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr><td class="var">wip_lead_time_buffer_factor</td><td class="def"><code>1.2</code></td><td>Buffer applied to the WIP earliest-start calculation</td></tr>
+        <tr><td class="var">use_dynamic_wip_earliest_start</td><td class="def"><code>False</code></td><td>Dynamic WIP start vs. fixed simulation start date</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Equipment capacity overrides</h3>
+    <table>
+      <thead><tr><th>Variable</th><th>Default</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr><td class="var">equip_capacity_&lt;group&gt; <span style="font-weight:400;color:var(--muted)">(×21)</span></td><td class="def">∞ / model</td><td>Daily <b>sheet capacity</b> per equipment group — e.g. <code>equip_capacity_ldi_노광</code> (LDI 노광), <code>equip_capacity_3d측정기</code>, <code>equip_capacity_aoi_vrs</code> (AOI(VRS)), <code>입고대기</code>, <code>진공포장</code>. A value ≥ 1,000,000 is treated as infinite.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Run mode</h3>
+    <table>
+      <thead><tr><th>Variable</th><th>Default</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr><td class="var">force_snapshot</td><td class="def"><code>False</code></td><td>Reprocess everything vs. incremental run</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note"><b>Fallback defaults</b> (used only when source data is missing, also settable per scenario):
+      <code>default_daily_capacity_sheets</code>=10 · <code>default_model_priority</code>=99999999 · <code>default_lead_time_days</code>=30 · <code>default_daily_capacity_lots</code>=2 · <code>default_panels_per_lot</code>=30 · <code>default_panels_per_sheet</code>=6 · <code>default_units_per_panel</code>=2400 · <code>default_units_per_sheet</code>=14400
+    </div>
+  </section>
+
+  <!-- ================= OUTPUTS ================= -->
+  <section>
+    <div class="band"><span class="chip out">Output</span><h2>Results the simulation returns</h2></div>
+    <p class="lead">Grouped by the question each result answers. The fulfillment scorecard is the headline; the rest explain <em>why</em> demand was or wasn't met.</p>
+
+    <div class="theme headline">
+      <div class="head"><span class="idx">1</span><span class="ttl">Fulfillment scorecard</span><span class="ds">— headline result · <code>simulation_monthly_fulfillment</code> (wide &amp; long)</span></div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:9px">Per month × model / customer / sales team:</div>
+      <div class="pillrow">
+        <span class="pill"><b>planned_demand_ea / _krw / _margin_krw</b> <span class="d">what was asked for</span></span>
+        <span class="pill"><b>total_produced_ea / _krw</b> <span class="d">what the sim made</span></span>
+        <span class="pill"><b>wip_produced</b> · <b>new_lots_produced</b> · <b>production_and_inventory</b> <span class="d">production split</span></span>
+        <span class="pill"><b>shortfall_ea / _krw / _margin_krw</b> <span class="d">couldn't make</span></span>
+        <span class="pill"><b>impossible_to_simulate_ea / _krw</b> <span class="d">no routing/data</span></span>
+        <span class="pill"><b>sheets_produced</b></span>
+        <span class="pill"><b>fulfillment %</b> <span class="d">produced ÷ planned</span></span>
+      </div>
+    </div>
+
+    <div class="theme">
+      <div class="head"><span class="idx">2</span><span class="ttl">Shortfall &amp; why</span><span class="ds">— <code>demand_shortfall_analysis</code></span></div>
+      <div class="pillrow">
+        <span class="pill"><b>shortfall_qty_units</b></span>
+        <span class="pill"><b>shortfall_pct</b></span>
+        <span class="pill"><b>shortfall_revenue_impact</b></span>
+        <span class="pill"><b>shortfall_margin_impact</b></span>
+        <span class="pill"><b>is_lead_time_constrained</b></span>
+        <span class="pill"><b>expected_completion_date</b></span>
+        <span class="pill"><b>days_over_month_end</b></span>
+      </div>
+    </div>
+
+    <div class="theme">
+      <div class="head"><span class="idx">3</span><span class="ttl">Capacity bottlenecks</span><span class="ds">— <code>equipment_capacity_shortages</code> + <code>lot_waiting_periods</code></span></div>
+      <div class="pillrow">
+        <span class="pill"><b>equipment_group</b> / <b>delay_date</b> <span class="d">where &amp; when short</span></span>
+        <span class="pill"><b>lots_on_date</b></span>
+        <span class="pill"><b>failed_count</b></span>
+        <span class="pill"><b>total_waiting_days</b></span>
+        <span class="pill"><b>total_revenue</b> / <b>total_margin</b> <span class="d">at stake</span></span>
+      </div>
+    </div>
+
+    <div class="theme">
+      <div class="head"><span class="idx">4</span><span class="ttl">ET JIG risk</span><span class="ds">— <code>et_jig_capacity_risk_analysis</code></span></div>
+      <div class="pillrow">
+        <span class="pill"><b>is_at_risk</b></span>
+        <span class="pill"><b>lots_at_risk</b> · <b>units_at_risk</b></span>
+        <span class="pill"><b>days_late</b></span>
+        <span class="pill"><b>total_jigs_needed</b></span>
+        <span class="pill"><b>risk_percentage</b></span>
+        <span class="pill"><b>total_margin_at_risk</b></span>
+      </div>
+    </div>
+
+    <div class="theme">
+      <div class="head"><span class="idx">5</span><span class="ttl">Material shortage risk</span><span class="ds">— <code>material_depletion_events</code> (+ consumption, constrained lots, DQ)</span></div>
+      <div class="pillrow">
+        <span class="pill"><b>is_shortage</b></span>
+        <span class="pill"><b>shortfall_quantity</b></span>
+        <span class="pill"><b>constraint_date</b></span>
+        <span class="pill"><b>constraining_materials</b></span>
+        <span class="pill"><b>affected_models</b></span>
+        <span class="pill"><b>furthest_completable_sequence</b></span>
+      </div>
+    </div>
+
+    <div class="theme">
+      <div class="head"><span class="idx">6</span><span class="ttl">New-model demand risk</span><span class="ds">— <code>unrouted_model_demand</code></span></div>
+      <div class="pillrow">
+        <span class="pill"><b>model_id</b></span>
+        <span class="pill"><b>demand_qty_ea</b></span>
+        <span class="pill"><b>shortfall_month</b></span>
+        <span class="pill"><b>customer_name</b> / <b>end_customer</b></span>
+        <span class="pill"><b>remediation_suggestion</b> <span class="d">Korean action text</span></span>
+      </div>
+    </div>
+
+    <div class="theme">
+      <div class="head"><span class="idx">7</span><span class="ttl">Reconciled production risk</span><span class="ds">— <code>production_risk_reconciliation</code></span></div>
+      <div class="pillrow">
+        <span class="pill"><b>fulfillment_shortfall_ea / _krw</b></span>
+        <span class="pill"><b>risk_contribution_ea / _krw</b></span>
+        <span class="pill"><b>units_affected</b></span>
+        <span class="pill"><b>total_revenue</b> / <b>total_margin</b></span>
+      </div>
+    </div>
+
+    <div class="theme">
+      <div class="head"><span class="idx">8</span><span class="ttl">Detailed schedule (drill-down)</span><span class="ds">— <code>allocation_output</code> + <code>failed_allocations</code></span></div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:9px">Per lot-step, for users who need the granular plan:</div>
+      <div class="pillrow">
+        <span class="pill"><b>Allocated:</b> allocated_date · equipment_id · equipment_group · actual_completion_month · is_delayed_completion · units_produced · days_delayed · delay_reasons</span>
+        <span class="pill"><b>Failed:</b> failure_reason · failure_status · days_searched · potential_units lost</span>
+      </div>
+    </div>
+
+    <div class="note t"><b>Also produced</b> (supporting / metadata, not primary results): <code>net_production_demand</code> (demand net of inventory), <code>new_lots_created</code> (virtual lots), <code>allocation_run_tracker</code> (run metadata), <code>revenue_plan_data_quality_issues</code>, <code>predicted_event_times</code>, <code>simulation_complete</code>.</div>
+  </section>
+
+  <footer>
+    Generated 2026-06-29 · Inputs from <code>config.py</code> / <code>simulation_config</code> · Outputs traced from the allocation engine transforms &amp; <code>models.py</code>.<br>
+    Companion to <code>RevPlan_to_PPS_RTS_Source_Mapping.html</code>.
+  </footer>
+
+</div>
+</body>
+</html>
