@@ -681,49 +681,165 @@ def read_model_priorities(params) -> pl.DataFrame:
                   "MISSING — priority rank = MES 우선도 (external); margin has no source")
 
 
-# ---- ✅ wip_lots  <-  RTSP_MGR.RTSP_WIP_N  (🔴 needs crosswalk) ----------------
+# ---- ✅ wip_lots  <-  RTSP_MGR.RTSP_WIP_N  (grain fixed 2026-07-16) ------------
+# WipDaily is a DAILY SNAPSHOT table (data-verified 2026-07-16: 67 distinct
+# SnapshotDates, every long-lived lot has exactly one row per date). The old read
+# handed ALL snapshot rows to the engine, which treated a lot's 67-day POSITION
+# HISTORY as steps to allocate — re-planning the lot's past, never its remaining
+# route. The read now: (1) filters to the run's site scope, (2) keeps only the
+# LATEST snapshot (one row per lot = its current position), and (3) explodes each
+# lot into its REMAINING routing steps (route WorkSeq >= current SEQ) — the same
+# shape virtual lots use, so the engine plans the actual road ahead.
+WIP_SITES = frozenset(
+    s.strip().upper()
+    for s in os.environ.get("REVPLAN_WIP_SITES", "PK1").split(",")
+    if s.strip() and s.strip().lower() != "all")
+# "remaining_route" (default) | "current_only" (filters, no explode) | "legacy" (old raw read)
+WIP_MODE = os.environ.get("REVPLAN_WIP_MODE", "remaining_route").strip().lower()
+
+
 def read_wip_lots(params) -> pl.DataFrame:
-    df = _pull("RTSP_WIP_N", {
+    cols = {
         "lot_id":               "LOTID",
         "model_id":             "PRODID",          # ✅ PRODID == MODEL_NO — used directly (no crosswalk)
         # 🔴 process_id MUST be the un-prefixed OperationCode (e.g. 'ML30N'), NOT PROCID.
-        # WipDaily.PROCID is site-prefixed ('FK1ML30N' / 'PK1ML30N' — the prefix is the
-        # PlanningSiteCode and it VARIES by site), while the routing (ModelRoute.OperationCode)
-        # and the capability map (EquipmentConstraints.OperationCode) both key on the SHORT
-        # code. Reading PROCID here made every existing-WIP step miss process_to_equipment
-        # -> FAILED_NO_EQUIPMENT -> Phase-1 allocated 0 units. OperationCode (which WipDaily
-        # carries directly, value 'ML30N') aligns WIP ↔ routing ↔ equipment_to_process.
+        # WipDaily.PROCID is site-prefixed ('FK1ML30N' / 'PK1ML30N') while routing and the
+        # capability map key on the SHORT code.
         "process_id":           "OperationCode",
         "sequence":             "SEQ",
         "equipment_group_id":   "EQPTID",          # ⚠️ specific machine, NOT the group
         "latest_sheet_quantity": "REAL_WIPSHTQTY",
         "latest_unit_quantity":  "REAL_WIPUNITQTY",
-    })
+    }
+    df = None
+    if WIP_MODE != "legacy":
+        try:
+            df = _pull("RTSP_WIP_N", {**cols,
+                                      "_snapshot_date": "SnapshotDate",
+                                      "_site":          "PlanningSiteCode"})
+        except Exception as ex:  # noqa: BLE001
+            print(f"   ⚠ wip_lots: SnapshotDate/PlanningSiteCode not readable ({type(ex).__name__}); "
+                  "falling back to the legacy raw read (NO snapshot/site filter)")
+    if df is None:
+        df = _pull("RTSP_WIP_N", cols)
     if df.height:
         # SEQ orders a lot's steps in group_wip_by_lot; real WIP carries null SEQ, and a
-        # null mixed with floats breaks that sort ('<' NoneType vs float). Coalesce to 0
-        # (the sort's own intended default, x.get("sequence", 0)) under a single Int64
-        # dtype. Cast the WIP quantities to Float64 so downstream capacity math sees a
-        # consistent numeric type too.
+        # null mixed with floats breaks that sort. Coalesce to 0 under a single Int64
+        # dtype; cast quantities to Float64 for consistent capacity math.
         df = df.with_columns([
             pl.col("sequence").cast(pl.Int64, strict=False).fill_null(0),
             pl.col("latest_sheet_quantity").cast(pl.Float64, strict=False),
             pl.col("latest_unit_quantity").cast(pl.Float64, strict=False),
         ])
-    # ⚠️ equipment_group_id: EQPTID is a machine; needs machine->group rollup
-    #    (PK1_EQUIPMENT.MAPPING_NAME / PK1_OPERATION.MODIFIED_GROUP). Left as raw EQPTID.
-    # ❌ remaining_steps / final_work_sequence: not columns — derive from routing
-    #    (count / max SEQ per PRODID). Engine has a fallback, so null is safe.
 
-    # ✅ Tier-1 urgency flag  <-  PKG_MGR.PK1_URGENCY_WIP_LOT
-    # Membership in that table = urgent = top priority (NO priority column there).
-    # Join creation_date on lot_id and derive is_urgent. Stale/non-WIP urgency rows
-    # simply don't match a WIP row, so they are never flagged (auto-filtered) — see the
-    # 94.7% overlap check (47 stale ids, 2017–2025). Mirrors the sales_team join above.
+    # (1) site scope — the simulated equipment/capacity is PK1-side; other sites'
+    # lots (FK1 ≈ 9%) would run "outsourced" through processes that are really the
+    # other fab's in-house ops. REVPLAN_WIP_SITES=all disables.
+    if "_site" in df.columns and WIP_SITES:
+        pre = df.height
+        df = df.filter(
+            pl.col("_site").cast(pl.Utf8).str.strip_chars().str.to_uppercase().is_in(list(WIP_SITES)))
+        print(f"   ✓ wip_lots: site filter {sorted(WIP_SITES)} — {df.height:,} of {pre:,} rows kept")
+
+    # (2) latest snapshot only -> one row per lot (its CURRENT position).
+    if "_snapshot_date" in df.columns and df.height:
+        max_snap = df["_snapshot_date"].max()
+        pre_lots = df["lot_id"].n_unique()
+        df = df.filter(pl.col("_snapshot_date") == max_snap)
+        # safety: if a lot still has >1 row in one snapshot, keep its furthest position
+        df = df.sort("sequence", descending=True).unique(subset=["lot_id"], keep="first")
+        print(f"   ✓ wip_lots: latest snapshot {max_snap} — {df.height:,} current lots "
+              f"(of {pre_lots:,} lots seen across all snapshots)")
+    df = df.drop([c for c in ("_snapshot_date", "_site") if c in df.columns])
+
+    # (3) remaining-route explosion — plan the road AHEAD of each lot.
+    if WIP_MODE == "remaining_route" and df.height:
+        df = _explode_wip_remaining_route(df)
+
+    # ⚠️ equipment_group_id: EQPTID is a machine; needs machine->group rollup. Left raw.
+    # ❌ remaining_steps / final_work_sequence: engine has a fallback, so null is safe.
+
+    # ✅ Tier-1 urgency flag  <-  PKG_MGR.PK1_URGENCY_WIP_LOT (after the explosion so
+    # every step row of an urgent lot carries the flag; urgent pre-pass reads steps[0]).
     df = _add_urgency_flag(df)
 
     return _add_missing(df, ["remaining_steps", "final_work_sequence",
                              "is_urgent", "urgency_creation_date"])
+
+
+def _explode_wip_remaining_route(current: pl.DataFrame) -> pl.DataFrame:
+    """One row per lot × REMAINING routing step, from each lot's current position.
+
+    The latest snapshot gives each lot's current (process, SEQ); the road ahead is
+    the model's routing steps with WorkSeq >= current SEQ (>=: the current step is
+    still WAIT/in-progress and must complete). WipDaily.SEQ and ModelRoute.WorkSeq
+    share the same scale (RoutingSeq == SEQ, data-verified). The lot's current
+    sheet/unit quantities ride on every remaining step — the same shape
+    virtual_lot_creator emits, so the engine consumes it unchanged. Routing Run/Wait
+    LTs are carried per step (the outsourced pass-through uses them directly).
+
+    Lots whose model has no routing keep their single current-position row (the old
+    behaviour) so they are not silently dropped.
+    """
+    try:
+        rt = None
+        try:
+            rt = _pull("RTSP_MODEL_ROUTING_M", {
+                "model_id":           "PRODID",
+                "_route_seq":         "SEQ",
+                "_route_process":     "PROCID",
+                "_route_group":       "OP_MACHINE_CODE",
+                "run_lt":             "RUN_LT",
+                "wait_lt":            "WAIT_LT",
+            })
+        except Exception:  # noqa: BLE001 — Run/Wait columns may be absent
+            rt = _pull("RTSP_MODEL_ROUTING_M", {
+                "model_id":           "PRODID",
+                "_route_seq":         "SEQ",
+                "_route_process":     "PROCID",
+                "_route_group":       "OP_MACHINE_CODE",
+            })
+    except Exception as ex:  # noqa: BLE001
+        print(f"   ⚠ wip_lots: routing not readable for the remaining-route explosion "
+              f"({type(ex).__name__}); keeping current-position rows only")
+        return current
+    if rt.height == 0:
+        print("   ⚠ wip_lots: routing empty; keeping current-position rows only")
+        return current
+
+    rt = rt.with_columns(pl.col("_route_seq").cast(pl.Int64, strict=False).fill_null(0))
+    for c in ("run_lt", "wait_lt"):
+        if c in rt.columns:
+            rt = rt.with_columns(pl.col(c).cast(pl.Float64, strict=False))
+
+    lots = current.select(["lot_id", "model_id", "sequence",
+                           "latest_sheet_quantity", "latest_unit_quantity",
+                           "equipment_group_id"]).rename({
+        "sequence": "_current_seq",
+        "equipment_group_id": "_current_eqpt",
+    })
+    exploded = (
+        lots.join(rt, on="model_id", how="inner")
+            .filter(pl.col("_route_seq") >= pl.col("_current_seq"))
+            .with_columns([
+                pl.col("_route_seq").alias("sequence"),
+                pl.col("_route_process").alias("process_id"),
+                pl.col("_route_group").alias("equipment_group_id"),
+            ])
+            .drop(["_route_seq", "_route_process", "_route_group", "_current_eqpt"])
+    )
+    covered = set(exploded["lot_id"].unique().to_list())
+    orphans = current.filter(~pl.col("lot_id").is_in(list(covered)))
+    if orphans.height:
+        print(f"   ⚠ wip_lots: {orphans.height:,} lots have no routing (or none at/after their "
+              "current step) — kept as single current-position rows")
+        exploded = pl.concat([exploded, orphans.select(exploded.columns)
+                              if set(orphans.columns) >= set(exploded.columns)
+                              else orphans], how="diagonal_relaxed")
+    n_lots = exploded["lot_id"].n_unique()
+    print(f"   ✓ wip_lots: remaining-route explosion — {n_lots:,} lots × "
+          f"avg {exploded.height / max(n_lots, 1):.0f} remaining steps = {exploded.height:,} step rows")
+    return exploded.drop([c for c in ("_current_seq",) if c in exploded.columns])
 
 
 def _add_urgency_flag(df: pl.DataFrame) -> pl.DataFrame:
