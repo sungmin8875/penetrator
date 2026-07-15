@@ -107,6 +107,21 @@ ONHAND_FGI_CODES = frozenset(
     for v in os.environ.get("REVPLAN_ONHAND_FGI_CODES", "FGI").split(",")
     if v.strip()
 )
+# Shipped bucket of available_inventory (2026-07-15, o_custom_Shipping wired):
+# month-to-date shipments for the run's start month count as inventory in the
+# engine contract (netting priority transit -> shipped -> onhand). "off" restores
+# the previous shipped=0 behaviour for A/B and parity runs.
+SHIPPED_MODE = os.environ.get("REVPLAN_SHIPPED_MODE", "start_month").strip().lower()
+# VersionName sets: RESULT rows add, RTN rows (returns) subtract.
+SHIPPING_RESULT_VERSIONS = frozenset(
+    v.strip().upper()
+    for v in os.environ.get("REVPLAN_SHIPPING_RESULT_VERSIONS", "SALES_RESULT").split(",")
+    if v.strip())
+SHIPPING_RTN_VERSIONS = frozenset(
+    v.strip().upper()
+    for v in os.environ.get("REVPLAN_SHIPPING_RTN_VERSIONS", "SALES_RESULT_RTN").split(",")
+    if v.strip())
+
 ONHAND_TRANSIT_CODES = frozenset(
     v.strip().upper()
     for v in os.environ.get("REVPLAN_ONHAND_TRANSIT_CODES", "FGI-TRN").split(",")
@@ -137,6 +152,7 @@ TABLE_MAP: Dict[str, str] = {
     "PK1_ERP_ONHAND_LOT":        "o_custom_OnHandLot",            # ✅ 2026-07-10 — lot-level FG on-hand (MODEL_CODE-keyed; detailed SubinventoryCode FGI/FGI-TRN/…) → feeds available_inventory (on-hand + transit)
     "PK1_JIG_MASTER":            "o_custom_JIGMaster",            # ✅ 2026-07-10 — ET-JIG capacity/qty (JigQty, JigCapa); NO model col — model comes from JIGDetail (see read_et_jig_master)
     "PK1_JIG_DETAIL":            "o_custom_JIGDetail",            # ✅ 2026-07-10 — per-jig target model (ModelNo); joined to JIGMaster via the OCPM relationship in read_et_jig_master
+    "PK1_SHIPPING":              "o_custom_Shipping",             # ✅ 2026-07-15 — shipment lines (ItemNo=MODEL_NO, ShippedQuantity EA, ShippingDate) → shipped bucket of available_inventory
 }
 COLUMN_MAP: Dict[str, Dict[str, str]] = {
     "PK1_MPLAN": {
@@ -191,6 +207,13 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "SUBINVENTORY_CODE": "SubinventoryCode",  # coarse: 'RAW-MTL' / 'FGI'
         "BATCH_DATE":        "BatchDate",
         "BATCH_HOUR":        "BatchHour",
+    },
+    "PK1_SHIPPING": {
+        "MODEL_NO":      "ItemNo",           # ✅ MODEL_NO form (MGF42040) → model_id, direct join (Model FK exists too)
+        "SHIPPED_QTY":   "ShippedQuantity",  # ✅ EA (26,130 EA @ $0.144/EA — substrate-unit scale)
+        "SHIPPING_DATE": "ShippingDate",     # ✅ physical ship event; precedes record CreationDate (posting lag) — the bucketing key
+        "VERSION_NAME":  "VersionName",      # ✅ SALES_RESULT (shipments) / SALES_RESULT_RTN (returns — subtract)
+        "ORGANIZATION_CODE": "OrganizationCode",  # PK1 (unused for now; single site)
     },
     "PK1_ERP_ONHAND_LOT": {
         "MODEL_CODE":        "ModelCode",          # ✅ MODEL_NO form (MGS832G2 / SPCCP30021.KMC2) → model_id, direct join
@@ -435,6 +458,67 @@ def read_revenue_plan(params) -> pl.DataFrame:
     return _add_missing(df, ["margin_krw", "grouping_model", "sales_team", "revenue_type"])
 
 
+def _shipped_quantities(start_month: Optional[str]) -> Optional[pl.DataFrame]:
+    """Net EA shipped per model within `start_month` (YYYYMM), from o_custom_Shipping.
+
+    Month-to-date shipments against the current plan month are inventory in the
+    engine contract — goods that already left and fulfilled demand. Bucketing key
+    is ShippingDate (the physical event; record CreationDate lags it). VersionName
+    SALES_RESULT rows ADD; SALES_RESULT_RTN rows (returns) SUBTRACT as absolute
+    values (sign-convention-proof); net is floored at 0 per model.
+
+    Returns (model_id, shipped_quantity_ea), or None to skip (mode off, no
+    start_month, object unreadable, or no rows in the month) — the caller then
+    keeps shipped=0, the pre-2026-07-15 behaviour.
+    """
+    if SHIPPED_MODE == "off":
+        print("   ⚠ REVPLAN_SHIPPED_MODE=off — shipped=0 (previous behaviour)")
+        return None
+    if not start_month:
+        print("   ⚠ shipped: params has no start_month; shipped=0")
+        return None
+    try:
+        sh = _pull("PK1_SHIPPING", {
+            "model_id":      "MODEL_NO",
+            "shipped_qty":   "SHIPPED_QTY",
+            "shipping_date": "SHIPPING_DATE",
+            "version_name":  "VERSION_NAME",
+        })
+    except Exception as ex:  # noqa: BLE001
+        print(f"   ⚠ shipped: Shipping object not readable ({type(ex).__name__}); shipped=0 "
+              "(TABLE_MAP 'PK1_SHIPPING' -> 'o_custom_Shipping')")
+        return None
+    if sh.height == 0:
+        return None
+    sh = sh.filter(pl.col("model_id").is_not_null()).with_columns([
+        pl.col("shipped_qty").cast(pl.Float64, strict=False),
+        pl.col("shipping_date").cast(pl.Datetime, strict=False).dt.strftime("%Y%m").alias("_ship_month"),
+        pl.col("version_name").cast(pl.Utf8).str.strip_chars().str.to_uppercase().alias("_version"),
+    ]).filter(pl.col("_ship_month") == str(start_month))
+    result_mask = pl.col("_version").is_in(list(SHIPPING_RESULT_VERSIONS))
+    rtn_mask    = pl.col("_version").is_in(list(SHIPPING_RTN_VERSIONS))
+    sh = sh.filter(result_mask | rtn_mask)
+    if sh.height == 0:
+        print(f"   ✓ shipped: no {start_month} rows in Shipping object "
+              f"({sorted(SHIPPING_RESULT_VERSIONS | SHIPPING_RTN_VERSIONS)}); shipped=0")
+        return None
+    agg = (
+        sh.group_by("model_id")
+          .agg([
+              pl.col("shipped_qty").filter(result_mask).sum().fill_null(0.0).alias("_shipped"),
+              pl.col("shipped_qty").filter(rtn_mask).abs().sum().fill_null(0.0).alias("_returned"),
+          ])
+          .with_columns(
+              pl.max_horizontal(pl.col("_shipped") - pl.col("_returned"), pl.lit(0.0))
+                .alias("shipped_quantity_ea"))
+          .select(["model_id", "shipped_quantity_ea"])
+    )
+    tot_s = float(agg["shipped_quantity_ea"].sum() or 0)
+    print(f"   ✓ shipped ({start_month}): {agg.height} models, net {tot_s:,.0f} EA "
+          f"(SALES_RESULT − |SALES_RESULT_RTN|, floored at 0)")
+    return agg
+
+
 # ---- ✅ available_inventory  <-  OnHandLot object (FGI on-hand + transit) ----
 _AVAIL_INV_SCHEMA = {
     "model_id": pl.Utf8, "grouping_model": pl.Utf8, "plan_month": pl.Utf8,
@@ -462,9 +546,11 @@ def read_available_inventory(params) -> pl.DataFrame:
         didn't either; transit rows can carry a non-'FGI' ItemType).
       • Transit uses the FGI-TRN rows' OnhandQty, NOT the IntransitStock column (using both
         would double-count) — IntransitStock is deliberately left unread.
-      • total_inventory_ea = on-hand + transit; shipped_quantity_ea = 0 (shipped lives only in
-        PK1_SHIPPING, not exposed). net_production_demand re-derives transit = total − shipped −
-        onhand, so the split round-trips through the engine contract.
+      • shipped = net EA shipped in the run's START MONTH from o_custom_Shipping
+        (2026-07-15; see _shipped_quantities — SALES_RESULT − returns, floored at 0).
+        Applied in start_month mode only; total_inventory_ea = on-hand + transit + shipped
+        so net_production_demand's re-derivation transit = total − shipped − onhand
+        round-trips exactly. REVPLAN_SHIPPED_MODE=off restores shipped=0.
       • total_inventory_sht = total_inventory_ea / units_per_sheet (EA_IN_SHEET on PK1_MODEL).
       • plan_month: the snapshot has no month, so ONHAND_MONTH_MODE pins it (start_month default).
 
@@ -519,25 +605,45 @@ def read_available_inventory(params) -> pl.DataFrame:
         agg = agg.with_columns(
             pl.col("_creation").cast(pl.Datetime, strict=False).dt.strftime("%Y%m").alias("plan_month"))
         month_note = "batch_month (per model's CreationDate)"
+        shipped = None  # shipped is keyed to the start month; incompatible with batch_month rows
+        if SHIPPED_MODE != "off":
+            print("   ⚠ shipped: skipped under ONHAND_MONTH_MODE=batch_month "
+                  "(shipped quantities are start-month-keyed)")
     else:
         start_month = str(getattr(params, "start_month", None) or "").strip() or None
+        # shipped: month-to-date shipments count as inventory. Full-join so a model
+        # with shipments but no FGI/FGI-TRN rows still gets its shipped credit; the
+        # start_month literal below covers those joined-in rows too.
+        shipped = _shipped_quantities(start_month)
+        if shipped is not None:
+            agg = agg.join(shipped, on="model_id", how="full", coalesce=True).with_columns([
+                pl.col("onhand_quantity_ea").fill_null(0.0),
+                pl.col("_transit_ea").fill_null(0.0),
+                pl.col("shipped_quantity_ea").fill_null(0.0),
+            ])
         agg = agg.with_columns(pl.lit(start_month).cast(pl.Utf8).alias("plan_month"))
         month_note = f"pinned to start_month={start_month}"
+    if shipped is None and "shipped_quantity_ea" not in agg.columns:
+        agg = agg.with_columns(pl.lit(0.0).alias("shipped_quantity_ea"))
 
+    # total = on-hand + transit + shipped: net_production_demand re-derives
+    # transit = total − shipped − onhand, so shipped MUST be inside the total or
+    # the derived transit goes negative by exactly the shipped amount.
+    _total = (pl.col("onhand_quantity_ea") + pl.col("_transit_ea") + pl.col("shipped_quantity_ea"))
     onhand = agg.with_columns([
         pl.lit(None, dtype=pl.Utf8).alias("grouping_model"),   # engine coalesces -> model_id
-        pl.lit(0.0).alias("shipped_quantity_ea"),              # shipped lives only in PK1_SHIPPING
-        (pl.col("onhand_quantity_ea") + pl.col("_transit_ea")).alias("total_inventory_ea"),
+        _total.alias("total_inventory_ea"),
         pl.when((pl.col("units_per_sheet").is_not_null()) & (pl.col("units_per_sheet") > 0))
-          .then((pl.col("onhand_quantity_ea") + pl.col("_transit_ea")) / pl.col("units_per_sheet"))
+          .then(_total / pl.col("units_per_sheet"))
           .otherwise(None).alias("total_inventory_sht"),
     ])
 
     tot_oh = float(onhand["onhand_quantity_ea"].sum() or 0)
     tot_tr = float(onhand["_transit_ea"].sum() or 0)
+    tot_sh = float(onhand["shipped_quantity_ea"].sum() or 0)
     print(f"   ✓ available_inventory: {onhand.height} models from OnHandLot — on-hand "
           f"{tot_oh:,.0f} EA {sorted(ONHAND_FGI_CODES)} + transit {tot_tr:,.0f} EA "
-          f"{sorted(ONHAND_TRANSIT_CODES)}; shipped=0; {month_note}")
+          f"{sorted(ONHAND_TRANSIT_CODES)} + shipped {tot_sh:,.0f} EA; {month_note}")
     return onhand.select(list(_AVAIL_INV_SCHEMA.keys()))
 
 
