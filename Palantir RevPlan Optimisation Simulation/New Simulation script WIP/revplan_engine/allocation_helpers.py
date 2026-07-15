@@ -132,7 +132,13 @@ def build_model_metadata_lookup(
         lead_time_days = int(lead_time_seconds / 86400) if lead_time_seconds else defaults.lead_time_days
         # Get daily capacity for staggering
         daily_capacity_lots = row.get("total_daily_capacity_lot")
-        daily_capacity_lots = min(int(daily_capacity_lots), 1) if daily_capacity_lots else defaults.daily_capacity_lots
+        # ⚠️ MLWB DIVERGENCE (2026-07-15): the Palantir source has min(int(x), 1) here,
+        # which clamps EVERY supplied capacity to 1 lot start/day — with real JIG data
+        # (JigCapa ≈ 2.5-5 lots/day, confirmed as the final per-model daily rate) that
+        # throttles virtual-lot starts several-fold and drives late completions. min is
+        # almost certainly a typo for max (floor at 1, e.g. for fractional capa < 1);
+        # max also keeps a 0.5-lots/day model at 1 instead of int()->0->default.
+        daily_capacity_lots = max(int(daily_capacity_lots), 1) if daily_capacity_lots else defaults.daily_capacity_lots
         # Get conversion factors
         conversion = conversion_lookup.get(model_id, {})
 

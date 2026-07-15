@@ -407,6 +407,17 @@ def load_config_from_row(row: Dict[str, Any], source_description: str = "dataset
     else:
         start_month = str(start_month_raw)
 
+    # ⚠️ MLWB DIVERGENCE (2026-07-15): the allocation horizon defaults RELATIVE to the
+    # plan start (start year + 2) instead of the hardcoded 2027. The engine short-
+    # circuits at Jan 1 of max_allocation_year, so the fixed value gave late-2026
+    # target months almost no runway — any slip past Dec 31 failed
+    # FAILED_HORIZON_EXCEEDED structurally, masking the real (capacity) cause.
+    # An explicit max_allocation_year on the config row still wins.
+    try:
+        _horizon_default = int(str(start_month)[:4]) + 2
+    except (ValueError, TypeError):
+        _horizon_default = default_constraints.max_allocation_year
+
     # Build constraints from row
     constraints = AllocationConstraints(
         hold_until_target_month_equipment_groups=default_constraints.hold_until_target_month_equipment_groups,
@@ -437,7 +448,7 @@ def load_config_from_row(row: Dict[str, Any], source_description: str = "dataset
             row, "fast_track_priority_threshold", default_constraints.fast_track_priority_threshold, int
         ),
         max_delay_days=_safe_get(row, "max_delay_days", default_constraints.max_delay_days, int),
-        max_allocation_year=_safe_get(row, "max_allocation_year", default_constraints.max_allocation_year, int),
+        max_allocation_year=_safe_get(row, "max_allocation_year", _horizon_default, int),
         start_month=start_month,
         wip_lead_time_buffer_factor=_safe_get(
             row, "wip_lead_time_buffer_factor", default_constraints.wip_lead_time_buffer_factor, float

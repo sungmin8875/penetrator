@@ -887,8 +887,13 @@ def read_model_master(params) -> pl.DataFrame:
     except Exception as _ex:  # noqa: BLE001
         print(f"   ⚠️ organization_code not read from o_custom_Model ({_ex}); add an "
               "'OrganizationCode' attribute to the Model object type. Leaving org null.")
+    # ✅ total_daily_capacity_lot (2026-07-15): Σ JigCapa per model from JIGDetail⋈JIGMaster
+    # (JigCapa = final lots/day per jig row) — fills the pModel rollup PPS has no column for.
+    # Models without jigs stay null -> engine default. REVPLAN_JIG_LOT_CAPACITY=off to skip.
+    _jig_capa = _jig_daily_lot_capacity()
+    if _jig_capa is not None:
+        df = df.join(_jig_capa, on="model_id", how="left")
     # ⚠️ base_model / grouping_model: no source column -> null (derive a grouping rule later).
-    # ❌ total_daily_capacity_lot: not in master -> null; engine falls back to default.
     return _add_missing(df, ["base_model", "grouping_model", "total_daily_capacity_lot", "organization_code"])
 
 
@@ -1068,6 +1073,72 @@ def read_equipment_to_process(params) -> pl.DataFrame:
                       "confirm object name + columns via the data-model introspection")
 
 
+def _pull_jig_rows() -> pl.DataFrame:
+    """Raw jig×model rows (model_id, jig_qty, jig_capa) from JIGDetail⋈JIGMaster.
+
+    Shared by read_et_jig_master (risk-analysis feed) and _jig_daily_lot_capacity
+    (per-model lot-start rate rollup for the model master). Raises with a
+    diagnostic message when the objects/columns/relationship aren't readable —
+    each caller degrades in its own way.
+    """
+    master = TABLE_MAP.get("PK1_JIG_MASTER", "o_custom_JIGMaster")
+    detail = TABLE_MAP.get("PK1_JIG_DETAIL", "o_custom_JIGDetail")
+    model_col = os.environ.get("REVPLAN_JIG_MODEL_COLUMN", "ModelNo")   # on JIGDetail
+    qty_col   = os.environ.get("REVPLAN_JIG_QTY_COLUMN",   "JigQty")    # on JIGMaster
+    capa_col  = os.environ.get("REVPLAN_JIG_CAPA_COLUMN",  "JigCapa")   # on JIGMaster
+    try:
+        from pycelonis.pql import PQL, PQLColumn
+        import pycelonis.pql as pql
+        dm = data_model()
+        q = PQL()
+        q += PQLColumn(name="model_id", query=f'"{detail}"."{model_col}"')
+        q += PQLColumn(name="jig_qty",  query=f'"{master}"."{qty_col}"')
+        q += PQLColumn(name="jig_capa", query=f'"{master}"."{capa_col}"')
+        try:
+            pdf = pql.DataFrame.from_pql(q, data_model=dm).to_pandas()
+        except AttributeError:
+            pdf = dm.export_data_frame(q)                               # SaolaPy absent -> legacy exporter
+        df = pl.from_pandas(pdf)
+    except Exception as ex:  # noqa: BLE001
+        raise RuntimeError(
+            f"read from {detail}⋈{master} failed ({ex}); confirm object names + columns "
+            f"({detail}.{model_col}, {master}.{qty_col}/{capa_col}) and that the two objects "
+            "are related in the data model — via data_model().get_tables()") from ex
+    return df.filter(pl.col("model_id").is_not_null())
+
+
+def _jig_daily_lot_capacity() -> Optional[pl.DataFrame]:
+    """Per-model daily lot-start capacity: Σ JigCapa over the model's jigs.
+
+    JigCapa is the FINAL daily lots/day figure per jig row (customer 2026-07-15:
+    "이미 계산되어 결과(box)로 제공 → 그대로 사용"), so the model-level rate is a
+    plain sum — this fills total_daily_capacity_lot, which Palantir's pModel
+    carried but PPS has no direct column for (replacement summary §4 rollup gap).
+    Feeds build_model_metadata_lookup -> daily_capacity_lots -> the virtual-lot
+    start stagger. A jig shared by several models is counted fully for each
+    (same open point as the risk analysis). Returns None to skip (env off or
+    source unreadable) — models then keep the engine default.
+    """
+    if os.environ.get("REVPLAN_JIG_LOT_CAPACITY", "on").strip().lower() == "off":
+        print("   ⚠ REVPLAN_JIG_LOT_CAPACITY=off — total_daily_capacity_lot stays null (engine default)")
+        return None
+    try:
+        rows = _pull_jig_rows()
+    except Exception as ex:  # noqa: BLE001
+        print(f"   ⚠ jig lot-capacity rollup skipped ({ex}); total_daily_capacity_lot stays null")
+        return None
+    if rows.height == 0:
+        return None
+    agg = (
+        rows.with_columns(pl.col("jig_capa").cast(pl.Float64, strict=False))
+            .group_by("model_id")
+            .agg(pl.col("jig_capa").sum().alias("total_daily_capacity_lot"))
+            .filter(pl.col("total_daily_capacity_lot") > 0)
+    )
+    print(f"   ✓ total_daily_capacity_lot: Σ JigCapa for {agg.height} models (lots/day, JIG rollup)")
+    return agg
+
+
 def read_et_jig_master(params) -> pl.DataFrame:
     """ET-JIG capacity per model — feeds compute_et_jig_risk (the et_jig_capacity_risk_analysis port).
 
@@ -1105,31 +1176,12 @@ def read_et_jig_master(params) -> pl.DataFrame:
     """
     _KOREAN = {"대상_모델": pl.Utf8, "JIG대수": pl.Int64, "Capa_Lot": pl.Float64,
                "Capa_Sheet": pl.Float64, "JIG_상태": pl.Utf8}
-    master = TABLE_MAP.get("PK1_JIG_MASTER", "o_custom_JIGMaster")
-    detail = TABLE_MAP.get("PK1_JIG_DETAIL", "o_custom_JIGDetail")
-    model_col = os.environ.get("REVPLAN_JIG_MODEL_COLUMN", "ModelNo")   # on JIGDetail
-    qty_col   = os.environ.get("REVPLAN_JIG_QTY_COLUMN",   "JigQty")    # on JIGMaster
-    capa_col  = os.environ.get("REVPLAN_JIG_CAPA_COLUMN",  "JigCapa")   # on JIGMaster
     try:
-        from pycelonis.pql import PQL, PQLColumn
-        import pycelonis.pql as pql
-        dm = data_model()
-        q = PQL()
-        q += PQLColumn(name="model_id", query=f'"{detail}"."{model_col}"')
-        q += PQLColumn(name="jig_qty",  query=f'"{master}"."{qty_col}"')
-        q += PQLColumn(name="jig_capa", query=f'"{master}"."{capa_col}"')
-        try:
-            pdf = pql.DataFrame.from_pql(q, data_model=dm).to_pandas()
-        except AttributeError:
-            pdf = dm.export_data_frame(q)                               # SaolaPy absent -> legacy exporter
-        df = pl.from_pandas(pdf)
+        df = _pull_jig_rows()
     except Exception as ex:  # noqa: BLE001
-        return _empty("et_jig_master", _KOREAN,
-                      f"read from {detail}⋈{master} failed ({ex}); confirm object names + columns "
-                      f"({detail}.{model_col}, {master}.{qty_col}/{capa_col}) and that the two objects "
-                      "are related in the data model — via data_model().get_tables()")
+        return _empty("et_jig_master", _KOREAN, str(ex))
     if df.height == 0:
-        return _empty("et_jig_master", _KOREAN, f"{detail}⋈{master} returned no rows")
+        return _empty("et_jig_master", _KOREAN, "JIGDetail⋈JIGMaster returned no rows")
     df = df.filter(pl.col("model_id").is_not_null())
     # JigCapa is the FINAL total (2026-07-15) but the verbatim analysis multiplies
     # Capa_Lot × JIG대수 — emit per-jig values so that product equals JigCapa again.
