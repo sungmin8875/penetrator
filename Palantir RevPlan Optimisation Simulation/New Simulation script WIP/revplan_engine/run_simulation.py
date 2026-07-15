@@ -89,7 +89,10 @@ class SimulationParams:
     # ---- timing & horizon -----------------------------------------------------
     start_date: date = field(default_factory=date.today)
     start_month: str = "202602"            # earliest month to allocate (YYYYMM)
-    max_allocation_year: int = 2027
+    # None -> config derives the horizon RELATIVE to start_month (start year + 2,
+    # see load_config_from_row). Set a year here only to pin an explicit wall —
+    # the old fixed 2027 default silently overrode the relative logic.
+    max_allocation_year: Optional[int] = None
     max_delay_days: int = 200
 
     # ---- demand & throughput --------------------------------------------------
