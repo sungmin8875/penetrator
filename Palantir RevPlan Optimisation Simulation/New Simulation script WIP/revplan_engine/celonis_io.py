@@ -447,6 +447,28 @@ def read_revenue_plan(params) -> pl.DataFrame:
             pl.col("quantity_ea").cast(pl.Float64, strict=False),
             pl.col("amount_krw").cast(pl.Float64, strict=False),
         ])
+        # ── Filter to the SELECTED revision (fix 2026-07-15) ──────────────────
+        # PK1_MPLAN carries EVERY revision back to 2015 (~636 of them). Unfiltered,
+        # net_production_demand processes them ALL and the allocation demand dict
+        # mixes rows across revisions per (model, month) — inflating demand by
+        # orders of magnitude (the 43M-unit carryovers). The frontend selects ONE
+        # plan version; simulate exactly that one.
+        _rp = str(getattr(params, "revenue_plan_id", None) or "").strip()
+        _revs = df["revenue_plan_id"].unique().to_list()
+        if _rp and _rp in _revs:
+            df = df.filter(pl.col("revenue_plan_id") == _rp)
+            print(f"   ✓ revenue_plan: revision {_rp} selected — {df.height:,} rows "
+                  f"(of {len(_revs)} revisions in PK1_MPLAN)")
+        else:
+            # No/unknown revision param -> newest revision key (MPyyyymm-woW-nnn sorts
+            # chronologically). ⚠️ approximates the customer's "last RELEASED" rule —
+            # PK1_MPLAN exposes no release-status column yet; revisit when it does.
+            _latest = max(_revs)
+            df = df.filter(pl.col("revenue_plan_id") == _latest)
+            print(f"   ⚠ revenue_plan: revenue_plan_id={_rp!r} not found "
+                  f"(revisions: {len(_revs)}) — falling back to NEWEST revision {_latest} "
+                  f"({df.height:,} rows). NOTE: newest-by-name approximates the "
+                  "'last released' rule (no release-status column on PK1_MPLAN).")
         # sales_team is NOT on PK1_MPLAN -> bring it from the model master (PK1_MODEL).
         try:
             mm = _pull("PK1_MODEL", {"model_id": "MODEL_NO", "sales_team": "SALES_TEAM"}).unique("model_id")

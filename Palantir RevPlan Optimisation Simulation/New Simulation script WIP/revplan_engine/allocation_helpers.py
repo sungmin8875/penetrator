@@ -463,11 +463,13 @@ def summarize_process_coverage(
     surfaces that split so the two are distinguishable in the run log:
       * covered              — op has ≥1 equipment in the constraints map.
       * uncovered / logical  — no equipment but in `logical_ops` → passes through the gate.
-      * uncovered / blocked  — no equipment and NOT logical → a real machine op that will
-                               still FAIL_NO_EQUIPMENT (actionable: extend the RTS allow-list
-                               or the logical-op list).
+      * uncovered / outsourced — no equipment and NOT logical → since 2026-07-15 (§4)
+                               these are ASSUMED OUTSOURCED and planned-complete via Plan LT
+                               (outsourced_allocation.py; equipment_id='OUTSOURCED') instead
+                               of failing. Audit the list: an op that should be in-house
+                               here means its equipment mapping is missing.
 
-    Returns the counts + the blocked op list (for tests / follow-up); also prints a summary.
+    Returns the counts + the outsourced-assumed op list (for tests / follow-up); also prints a summary.
     """
     def _ops(df: pl.DataFrame) -> Set[str]:
         if df is None or df.is_empty() or "process_id" not in df.columns:
@@ -488,11 +490,12 @@ def summarize_process_coverage(
     print(
         f"   ▶ process coverage: {len(covered)}/{total} routing ops have equipment "
         f"({pct:.1f}%); {len(logical_uncovered)} uncovered-but-logical (pass through), "
-        f"{len(blocked_uncovered)} uncovered real-machine ops STILL BLOCK."
+        f"{len(blocked_uncovered)} unmapped real-machine ops → ASSUMED OUTSOURCED "
+        f"(planned-complete via Plan LT; audit list below)."
     )
     if blocked_uncovered:
         sample = sorted(blocked_uncovered)[:20]
-        print(f"     blocked ops (first {len(sample)} of {len(blocked_uncovered)}): {sample}")
+        print(f"     outsourced-assumed ops (first {len(sample)} of {len(blocked_uncovered)}): {sample}")
 
     return {
         "total_routing_ops": total,
