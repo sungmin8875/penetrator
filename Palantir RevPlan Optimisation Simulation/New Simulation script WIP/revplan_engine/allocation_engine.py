@@ -76,6 +76,11 @@ from .allocation_helpers import (
 )
 from .virtual_lot_creator import create_virtual_lots
 from .urgent_allocation import run_urgent_prepass  # ⚠️ MLWB ADDITION — Tier-1 urgent pre-pass
+from .outsourced_allocation import (  # ⚠️ MLWB ADDITION — unmapped op = 외주 (customer 2026-07-15 §4)
+    install_plan_lt_lookup,
+    print_outsourced_summary,
+    try_allocate_outsourced_step,
+)
 from .allocation_run_tracker import (
     create_config_hash,
     create_run_record,
@@ -371,6 +376,9 @@ def allocate_month_by_month(
     blocked_demand = blocked_demand or {}
 
     state = AllocationState()
+    # ⚠️ MLWB ADDITION — (model, op) -> Run/Wait LT for the outsourced pass-through
+    # (lot-step dicts don't carry routing LTs; see outsourced_allocation.py).
+    install_plan_lt_lookup(state, model_process_steps_lookup)
     start_date = config.effective_start_date
 
     allocation_results: List[LotStepAllocation] = []
@@ -664,6 +672,9 @@ def allocate_month_by_month(
                 carryover_by_model[model_id] = final_shortfall
             else:
                 carryover_by_model[model_id] = 0
+
+    # ⚠️ MLWB ADDITION — audit trail: op codes assumed outsourced this run.
+    print_outsourced_summary(state)
 
     allocation_df = _create_allocation_dataframe(allocation_results)
     failed_allocations_df = _create_failed_allocations_dataframe(failed_allocation_results, simulation_name)
@@ -1117,6 +1128,24 @@ def _try_allocate_lot_step(
                 days_delayed=0,
                 delay_records=[],
             )
+
+        # =====================================================================
+        # ⚠️ MLWB ADDITION (customer meeting 2026-07-15 §4): unmapped op = 외주.
+        # Planned-complete after its Plan LT instead of failing — the lot flows
+        # on. Returns None only when treat_unmapped_as_outsourced is off, which
+        # falls through to the original FAILED_NO_EQUIPMENT behaviour.
+        # See outsourced_allocation.py for semantics + audit trail.
+        # =====================================================================
+        outsourced_result = try_allocate_outsourced_step(
+            lot_step=lot_step,
+            model_id=model_id,
+            state=state,
+            start_date=start_date,
+            is_new_lot=is_new_lot,
+            config=config,
+        )
+        if outsourced_result is not None:
+            return outsourced_result
 
         return AllocationAttemptResult(
             success=False,

@@ -11,6 +11,7 @@ MLWB notebook. One button click = one `main()` call = one scenario.
 | `run_simulation.py` | **Entry point + orchestrator.** OE-table lookup, param/config build, runs every step in memory, stubs. Celonis I/O is imported from `celonis_io.py`. |
 | `celonis_io.py` | **New.** All Celonis (pycelonis 2.x) coupling: connect, `read_oe_table_row`, `read_inputs` (PPS/RTS→engine column mapping; available tables wired, missing/partial as placeholders), `write_outputs`. Same isolation role for Celonis that `_foundry_shim.py` plays for Foundry. |
 | `priority_generation.py` | **New.** Weighted-priority generation (revenue/margin/delivery + prototype). **OFF by default.** |
+| `outsourced_allocation.py` | **New.** Unmapped-op = 외주 pass-through (customer 2026-07-15 §4): planned-complete after Plan LT, `equipment_id='OUTSOURCED'`, run-log audit of assumed op codes. **ON by default** (`treat_unmapped_as_outsourced=False` restores the old FAILED_NO_EQUIPMENT). |
 | `_foundry_shim.py` | **New.** No-op stand-ins for `transforms.api` + in-memory adapters so the ported `compute()`s run outside Foundry. |
 | `allocation_engine.py` | Byte-identical copy of `revenue_driven_allocation_refactored.py`. |
 | `allocation_helpers.py`, `virtual_lot_creator.py`, `allocation_run_tracker.py`, `config.py`, `models.py` | Byte-identical copies of the engine's pure helpers. |

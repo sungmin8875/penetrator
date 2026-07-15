@@ -82,6 +82,17 @@ class AllocationConstraints:
     # customer must confirm the full logical-op list (plan prerequisite P4).
     logical_passthrough_operation_codes: FrozenSet[str] = frozenset({"M000N"})
 
+    # Unmapped-operation handling (customer meeting 2026-07-15 §4): an operation
+    # with NO equipment mapping is OUTSOURCED (외주) — the step is planned-complete
+    # after its Plan LT (RunLt×sheets+WaitLt via outsourced_allocation.py) instead
+    # of failing FAILED_NO_EQUIPMENT and killing the lot's remaining steps.
+    # False restores the pre-2026-07-15 fail behaviour (A/B, parity runs).
+    treat_unmapped_as_outsourced: bool = True
+
+    # Planned duration (days) for an outsourced step whose routing carries no
+    # Run/Wait LT — the meeting's "계획완료일 임의 부여" fallback.
+    outsourced_step_days_default: int = 1
+
     # Conditional-Wait threshold in hours (meeting_summary §5): a step stalled beyond
     # this with no queued WIP should be treated as immediately loadable, so an excessive
     # Wait LT does not push the whole plan backward. RESERVED for the (deferred) time-based
@@ -406,6 +417,12 @@ def load_config_from_row(row: Dict[str, Any], source_description: str = "dataset
         ),
         wait_stall_threshold_hours=_safe_get(
             row, "wait_stall_threshold_hours", default_constraints.wait_stall_threshold_hours, float
+        ),
+        treat_unmapped_as_outsourced=_safe_get(
+            row, "treat_unmapped_as_outsourced", default_constraints.treat_unmapped_as_outsourced, bool
+        ),
+        outsourced_step_days_default=_safe_get(
+            row, "outsourced_step_days_default", default_constraints.outsourced_step_days_default, int
         ),
         max_steps_per_lot_per_day=_safe_get(
             row, "max_steps_per_lot_per_day", default_constraints.max_steps_per_lot_per_day, int
