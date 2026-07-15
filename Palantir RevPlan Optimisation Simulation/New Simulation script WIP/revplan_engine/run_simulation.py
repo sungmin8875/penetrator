@@ -214,12 +214,14 @@ def _as_bool(v) -> bool:
 def params_from_oe_row(simulation_id: str, row: Dict) -> SimulationParams:
     """Build SimulationParams from an OE-table row.
 
-    Weighted priority turns ON when the row asks for it — an explicit
-    `use_weighted_priority` flag if the OE table has one, otherwise inferred from the
-    weights (any non-zero weight = the user wants weighting). This only expresses
-    INTENT; the engine still applies a data-availability guard at run time
-    (priority_generation.build_model_priorities): a requested signal with no source is
-    dropped, and if nothing weighted survives it falls back to the MES/baseline pass-through.
+    Weighted priority turns ON only via an EXPLICIT `use_weighted_priority` flag on
+    the OE row (2026-07-15 meeting: weights judged not practically useful — keep
+    disabled; 이봉준 책임 "가중치 추가는 의미 없음"). It was previously INFERRED from
+    any non-zero weight, but the Action Flow/frontend always sends default weights
+    (e.g. 50/30/20), which silently forced weighted mode on every frontend run.
+    The weights are still parsed and stored so an explicit opt-in uses them, and
+    the engine's data-availability guard at run time still applies
+    (priority_generation.build_model_priorities).
     """
     def g(key, default):
         v = row.get(key)
@@ -227,7 +229,10 @@ def params_from_oe_row(simulation_id: str, row: Dict) -> SimulationParams:
 
     weights = (float(g("weight_revenue", 0)), float(g("weight_margin", 0)), float(g("weight_delivery", 0)))
     explicit = row.get("use_weighted_priority")     # absent unless added to the OE table + read_oe_table_row
-    use_weighted = _as_bool(explicit) if explicit is not None else (sum(weights) > 0)
+    use_weighted = _as_bool(explicit) if explicit is not None else False
+    if not use_weighted and sum(weights) > 0:
+        print(f"  ℹ weights {weights} received but weighted priority stays OFF "
+              "(2026-07-15 decision; opt in with an explicit use_weighted_priority flag)")
     return SimulationParams(
         simulation_id=simulation_id,
         simulation_name=g("scenario_name", None),
