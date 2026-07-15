@@ -681,6 +681,61 @@ def read_planned_process_steps(params) -> pl.DataFrame:
                              "run_lt", "wait_lt"])
 
 
+def _route_plan_lt_seconds(models: pl.DataFrame) -> Optional[pl.DataFrame]:
+    """Per-model Plan LT in SECONDS from the routing's Run/Wait columns.
+
+    Customer-confirmed replacement (2026-07-15) for the ADJUST_LEADTIME proxy:
+    Plan LT = Σ over routing steps of (RunLt × lot sheets + WaitLt), the planner
+    formula validated live in the 2026-07 workshop (0.3 × 5 + 10 = 11.4 h for a
+    5-sheet lot; Run is per-sheet, Wait per-lot, both in HOURS). Lot sheets =
+    LotSize (maximum_lot_size_sht, sheets/lot) from the model master.
+
+    Returns a (model_id, _lt_plan_s) frame, or None when the source degrades —
+    the caller then falls back to ADJUST_LEADTIME for every model. Models whose
+    routing carries no Run/Wait values sum to 0 h and come back NULL (per-model
+    fallback). Set REVPLAN_LEADTIME_SOURCE=adjust to force the old proxy for
+    A/B and parity runs.
+    """
+    if os.environ.get("REVPLAN_LEADTIME_SOURCE", "planlt").strip().lower() == "adjust":
+        print("   ⚠ REVPLAN_LEADTIME_SOURCE=adjust — ADJUST_LEADTIME proxy forced for all models")
+        return None
+    try:
+        rt = _pull("RTSP_MODEL_ROUTING_M", {
+            "model_id": "PRODID",
+            "run_lt":   "RUN_LT",
+            "wait_lt":  "WAIT_LT",
+        })
+    except Exception as ex:  # noqa: BLE001
+        print(f"   ⚠ Plan LT: routing Run/Wait not readable ({type(ex).__name__}); "
+              "ADJUST_LEADTIME fallback for all models")
+        return None
+    if rt.height == 0:
+        print("   ⚠ Plan LT: routing returned no rows; ADJUST_LEADTIME fallback for all models")
+        return None
+    default_sheets = 5.0  # config defaults: 30 panels/lot ÷ 6 panels/sheet
+    rt = rt.with_columns([
+        pl.col("run_lt").cast(pl.Float64, strict=False),
+        pl.col("wait_lt").cast(pl.Float64, strict=False),
+    ]).join(models.select(["model_id", "maximum_lot_size_sht"]), on="model_id", how="left")
+    rt = rt.with_columns(
+        (pl.col("run_lt").fill_null(0.0) * pl.col("maximum_lot_size_sht").fill_null(default_sheets)
+         + pl.col("wait_lt").fill_null(0.0)).alias("_step_lt_h")
+    )
+    agg = (
+        rt.group_by("model_id")
+          .agg(pl.col("_step_lt_h").sum().alias("_plan_lt_h"))
+          .with_columns(
+              pl.when(pl.col("_plan_lt_h") > 0)
+                .then(pl.col("_plan_lt_h") * 3600.0)   # hours -> engine-contract seconds
+                .otherwise(None)
+                .alias("_lt_plan_s"))
+          .select(["model_id", "_lt_plan_s"])
+    )
+    n = agg.filter(pl.col("_lt_plan_s").is_not_null()).height
+    print(f"   ✓ Plan LT: route-derived lead time for {n} models (Σ RunLt×sheets + WaitLt, h→s)")
+    return agg
+
+
 # ---- ✅ model_master  <-  PKG_MGR.PK1_MODEL -----------------------------------
 def read_model_master(params) -> pl.DataFrame:
     df = _pull("PK1_MODEL", {
@@ -688,17 +743,30 @@ def read_model_master(params) -> pl.DataFrame:
         "customer_name":  "CUSTOMER_NAME",
         "end_customer":   "END_CUSTOMER",
         "sales_team":     "SALES_TEAM",
-        "_adjust_leadtime_days": "ADJUST_LEADTIME",  # ⚠️ planning LT (days), not the Foundry measured median
+        "_adjust_leadtime_days": "ADJUST_LEADTIME",  # ✅ DAYS (customer-confirmed 2026-07-15) — FALLBACK only, see below
         "_lot_size":      "LOT_SIZE",
     }).unique("model_id")
     if df.height:
         df = df.with_columns([
-            # ⚠️ engine wants lead time in SECONDS (a measured median in Foundry).
-            #    Approximated from planning ADJUST_LEADTIME (days->s). Validate before trusting.
+            # Fallback lead time: ADJUST_LEADTIME is in DAYS (customer-confirmed
+            # 2026-07-15), converted to the engine's seconds contract.
             (pl.col("_adjust_leadtime_days").cast(pl.Float64, strict=False) * 86400.0)
-                .alias("total_mprod_default_lot_size_median_lt_in_s"),
+                .alias("_lt_adjust_s"),
             pl.col("_lot_size").cast(pl.Float64, strict=False).alias("maximum_lot_size_sht"),  # ⚠️ proxy
         ]).drop(["_adjust_leadtime_days", "_lot_size"])
+        # Lead time: route-derived Plan LT (customer-confirmed 2026-07-15 to REPLACE
+        # the ADJUST_LEADTIME proxy), per-model fallback to ADJUST_LEADTIME where the
+        # routing has no Run/Wait. Feeds lead_time_days -> virtual-lot start dates
+        # (allocation_helpers.build_model_metadata_lookup divides by 86400).
+        _plan = _route_plan_lt_seconds(df)
+        if _plan is not None:
+            df = df.join(_plan, on="model_id", how="left")
+        else:
+            df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("_lt_plan_s"))
+        df = df.with_columns(
+            pl.coalesce([pl.col("_lt_plan_s"), pl.col("_lt_adjust_s")])
+              .alias("total_mprod_default_lot_size_median_lt_in_s")
+        ).drop(["_lt_plan_s", "_lt_adjust_s"])
     # organization_code: the OCDM Model object's ID is ('Model_' || ORGANIZATION_CODE || MODEL_NO),
     # so SIM_ outputs need the org to build the Model FK. Pulled SEPARATELY + guarded so a Model
     # object that doesn't yet expose an "OrganizationCode" attribute doesn't break the whole
