@@ -136,6 +136,22 @@ class SimulationParams:
     prototype_pct: float = 0.0              # OE-table: prototype_pct (시제율)
     prototype_models: frozenset = frozenset()
 
+    def __post_init__(self):
+        # Clamp start_month up to start_date's month AT PARAMS CREATION so every
+        # consumer agrees — read_inputs pins available_inventory/shipped to
+        # params.start_month BEFORE build_config runs, so a clamp that lived only
+        # in build_config left inventory pinned to a past month while the engine
+        # planned from the current one (observed 2026-07-15: inventory at 202602,
+        # engine at 202607). Backdate start_date for a backtest; a future
+        # start_month is respected.
+        sm = str(self.start_month or "").strip()
+        sd_month = self.start_date.strftime("%Y%m")
+        if len(sm) == 6 and sm.isdigit() and sm < sd_month:
+            print(f"  ⚠ start_month {sm} predates effective_start_date "
+                  f"({self.start_date.isoformat()}) — raising to {sd_month} "
+                  "(backdate start_date instead for a backtest)")
+            self.start_month = sd_month
+
     # placeholders for the remaining HTML changes (not yet wired):
     enable_lot_de_leveling: bool = False
     enable_positive_constraints: bool = False
@@ -318,6 +334,21 @@ def run_allocation_engine(*,
         qty = row.get("net_production_demand_ea") or 0
         if model and month and qty > 0:
             demand_by_model_month_all[(model, month)] = qty
+
+    # ── Guard: does the selected plan cover any month the engine will process? ──
+    # allocate_month_by_month only processes months >= start_month. A stale plan
+    # revision (e.g. a January H1 plan run in July) leaves NOTHING to plan — the
+    # run then quietly produces urgent-prepass rows only, 0 virtual lots
+    # (observed 2026-07-15: "Processing months in order: []"). Say it loudly.
+    _plan_months = sorted({m for (_, m) in demand_by_model_month_all.keys()})
+    _live_months = [m for m in _plan_months if m >= config.constraints.start_month]
+    if _plan_months and not _live_months:
+        print(f"\n  ⛔ SELECTED PLAN HAS NO MONTHS AT/AFTER start_month="
+              f"{config.constraints.start_month}: plan covers {_plan_months[0]}–{_plan_months[-1]} "
+              f"({len(_plan_months)} months, ALL in the past).\n"
+              "     Tier-2 allocation will process NOTHING (urgent pre-pass only, 0 virtual lots).\n"
+              "     → Pick a CURRENT plan revision in the frontend, or backdate start_date "
+              "to simulate this plan as of its own period (backtest).\n")
 
     demand_model_ids = set(model for model, _ in demand_by_model_month_all.keys())
     blocked_models = find_models_with_blocked_equipment_paths(
