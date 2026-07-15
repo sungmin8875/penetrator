@@ -88,7 +88,9 @@ class SimulationParams:
 
     # ---- timing & horizon -----------------------------------------------------
     start_date: date = field(default_factory=date.today)
-    start_month: str = "202602"            # earliest month to allocate (YYYYMM)
+    # Earliest month to allocate (YYYYMM). Defaults to the CURRENT month — and
+    # build_config clamps any earlier value up to start_date's month anyway.
+    start_month: str = field(default_factory=lambda: date.today().strftime("%Y%m"))
     # None -> config derives the horizon RELATIVE to start_month (start year + 2,
     # see load_config_from_row). Set a year here only to pin an explicit wall —
     # the old fixed 2027 default silently overrode the relative logic.
@@ -145,9 +147,24 @@ class SimulationParams:
 def build_config(params: SimulationParams) -> AllocationConfig:
     """Build the engine's AllocationConfig from params, using the SAME construction
     as Palantir (`config.load_config_from_row`) so behavior matches the baseline."""
+    # ── Align start_month with the scheduling start (2026-07-15) ────────────────
+    # effective_start_date (default: today) is when allocation actually begins
+    # placing work, so plan months BEFORE it can only ever complete "late" — they
+    # poison the delayed-share KPI by construction (a 202602 start_month run in
+    # July marks Feb–Jun demand delayed before a single sheet is scheduled).
+    # Clamp start_month up to the month of start_date. A deliberately backdated
+    # start_date keeps a past start_month valid (historical backtests); an
+    # explicit later start_month still wins.
+    start_month = str(params.start_month or "").strip()
+    _sd_month = params.start_date.strftime("%Y%m")
+    if len(start_month) == 6 and start_month.isdigit() and start_month < _sd_month:
+        print(f"  ⚠ start_month {start_month} predates effective_start_date "
+              f"({params.start_date.isoformat()}) — raising to {_sd_month}. Months before the "
+              "scheduling start can only complete late; backdate start_date instead for a backtest.")
+        start_month = _sd_month
     row = {
         "effective_start_date": params.start_date,
-        "start_month": params.start_month,
+        "start_month": start_month,
         "max_allocation_year": params.max_allocation_year,
         "max_delay_days": params.max_delay_days,
         "demand_fulfillment_buffer": params.demand_fulfillment_buffer,
@@ -215,7 +232,7 @@ def params_from_oe_row(simulation_id: str, row: Dict) -> SimulationParams:
         simulation_id=simulation_id,
         simulation_name=g("scenario_name", None),
         revenue_plan_id=g("revenue_plan_id", None),
-        start_month=str(g("start_month", "202602")),
+        start_month=str(g("start_month", date.today().strftime("%Y%m"))),
         max_delay_days=int(g("max_delay_days", 200)),
         weight_revenue=weights[0],
         weight_margin=weights[1],
