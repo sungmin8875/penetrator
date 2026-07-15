@@ -1084,13 +1084,24 @@ def read_et_jig_master(params) -> pl.DataFrame:
     parent jig's qty/capa — which is exactly the per-(jig, model) grain the analysis then groups by
     model. Object/column names are env-overridable so a rename never needs a code edit.
 
-    ASSUMPTION to confirm: JigQty is the jig-unit count (→ JIG대수) and JigCapa the per-jig lot
-    capacity (→ Capa_Lot). If a model appears on several JIGDetail rows of the same master jig, the
-    straight join would count that jig's capacity once per row — dedupe upstream if that occurs.
+    ✅ CONFIRMED (customer meeting 2026-07-15): JigCapa is the FINAL capacity number
+    ("이미 계산되어 결과(box)로 제공 → 재계산 없이 그대로 사용") — NOT per jig unit. The
+    byte-identical analysis computes daily capacity as Σ(Capa_Lot × JIG대수)
+    (et_jig_risk.py:384-385, correct for Palantir's per-jig source), so feeding JigCapa
+    straight into Capa_Lot would inflate every JigQty>1 jig by ×JigQty. We therefore emit
+    Capa_Lot = JigCapa ÷ JigQty (per-jig), so the analysis's ×JIG대수 reconstructs the
+    confirmed total exactly, total_jig_units stays truthful, and lots_per_jig is a real
+    per-jig average. Null/0 JigQty counts as 1.
 
-    Two source gaps are handled here: the objects carry no jig-status column (→ every jig marked
-    정상/active) and a single JigCapa (→ reused for Capa_Sheet, which the analysis computes but never
-    uses downstream).
+    ✅ CONFIRMED (same meeting): no jig-status column exists anywhere — "everything in the
+    jig table is Active" is the agreed business rule, so JIG_상태='정상' for all rows is no
+    longer a proxy but the spec.
+
+    Still open: a jig serving several models (e.g. JIGMaster_1008 → 2 JIGDetail rows) has
+    its capacity counted fully for EACH model by the analysis's per-model group-by —
+    shared-jig capacity is not split/competed. Capa_Sheet reuses JigCapa (the analysis
+    computes but never uses it; JIGMaster.ATTRIBUTE3 ≈ JigCapa×5 is the likely real
+    Capa_Sheet if ever needed).
     """
     _KOREAN = {"대상_모델": pl.Utf8, "JIG대수": pl.Int64, "Capa_Lot": pl.Float64,
                "Capa_Sheet": pl.Float64, "JIG_상태": pl.Utf8}
@@ -1120,14 +1131,20 @@ def read_et_jig_master(params) -> pl.DataFrame:
     if df.height == 0:
         return _empty("et_jig_master", _KOREAN, f"{detail}⋈{master} returned no rows")
     df = df.filter(pl.col("model_id").is_not_null())
+    # JigCapa is the FINAL total (2026-07-15) but the verbatim analysis multiplies
+    # Capa_Lot × JIG대수 — emit per-jig values so that product equals JigCapa again.
+    _qty      = pl.col("jig_qty").cast(pl.Int64, strict=False).fill_null(1)
+    _qty_safe = pl.when(_qty > 0).then(_qty).otherwise(1)
+    _per_jig  = pl.col("jig_capa").cast(pl.Float64, strict=False) / _qty_safe
     out = df.select([
         pl.col("model_id").cast(pl.Utf8).alias("대상_모델"),
-        pl.col("jig_qty").cast(pl.Int64, strict=False).alias("JIG대수"),
-        pl.col("jig_capa").cast(pl.Float64, strict=False).alias("Capa_Lot"),
-        pl.col("jig_capa").cast(pl.Float64, strict=False).alias("Capa_Sheet"),
+        _qty_safe.alias("JIG대수"),
+        _per_jig.alias("Capa_Lot"),
+        _per_jig.alias("Capa_Sheet"),
         pl.lit("정상").alias("JIG_상태"),
     ])
-    print(f"   ✓ et_jig_master: {out.height} jig×model rows across {out['대상_모델'].n_unique()} models")
+    print(f"   ✓ et_jig_master: {out.height} jig×model rows across {out['대상_모델'].n_unique()} models "
+          "(Capa_Lot = JigCapa ÷ JigQty; analysis reconstructs the confirmed total via ×JIG대수)")
     return out
 
 
