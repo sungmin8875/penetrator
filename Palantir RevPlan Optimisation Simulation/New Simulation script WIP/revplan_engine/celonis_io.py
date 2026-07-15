@@ -873,6 +873,7 @@ def read_model_master(params) -> pl.DataFrame:
         "sales_team":     "SALES_TEAM",
         "_adjust_leadtime_days": "ADJUST_LEADTIME",  # ✅ DAYS (customer-confirmed 2026-07-15) — FALLBACK only, see below
         "_lot_size":      "LOT_SIZE",
+        "_ea_in_sheet":   "EA_IN_SHEET",
     }).unique("model_id")
     if df.height:
         df = df.with_columns([
@@ -880,8 +881,23 @@ def read_model_master(params) -> pl.DataFrame:
             # 2026-07-15), converted to the engine's seconds contract.
             (pl.col("_adjust_leadtime_days").cast(pl.Float64, strict=False) * 86400.0)
                 .alias("_lt_adjust_s"),
-            pl.col("_lot_size").cast(pl.Float64, strict=False).alias("maximum_lot_size_sht"),  # ⚠️ proxy
-        ]).drop(["_adjust_leadtime_days", "_lot_size"])
+            # ✅ LotSize is in EA (data-verified 2026-07-15: LotSize ÷ EaInSheet = 5
+            # sheets exactly across families — the standard 30-panel lot; real WIP
+            # lots run 0.1-10 sheets). maximum_lot_size_sht = LotSize ÷ EaInSheet.
+            # Reading LotSize as sheets inflated lots ~10,000× (11,415-panel VLs,
+            # never-fitting steps, weeks-long outsourced Plan LTs → 2042 horizons).
+            # Null/0 EaInSheet -> null -> engine default (30 panels = 5 sheets).
+            # REVPLAN_LOTSIZE_UNIT=sheets restores the old direct read (A/B).
+            pl.when(
+                (pl.lit(os.environ.get("REVPLAN_LOTSIZE_UNIT", "ea").strip().lower()) == "sheets")
+            ).then(pl.col("_lot_size").cast(pl.Float64, strict=False))
+             .otherwise(
+                pl.when(pl.col("_ea_in_sheet").cast(pl.Float64, strict=False) > 0)
+                  .then(pl.col("_lot_size").cast(pl.Float64, strict=False)
+                        / pl.col("_ea_in_sheet").cast(pl.Float64, strict=False))
+                  .otherwise(None)
+             ).alias("maximum_lot_size_sht"),
+        ]).drop(["_adjust_leadtime_days", "_lot_size", "_ea_in_sheet"])
         # Lead time: route-derived Plan LT (customer-confirmed 2026-07-15 to REPLACE
         # the ADJUST_LEADTIME proxy), per-model fallback to ADJUST_LEADTIME where the
         # routing has no Run/Wait. Feeds lead_time_days -> virtual-lot start dates
@@ -938,8 +954,19 @@ def read_model_unit_conversion(params) -> pl.DataFrame:
               .then(pl.col("units_per_sheet") / pl.col("units_per_panel"))
               .otherwise(None).alias("panels_per_sheet")
         )
-        # ⚠️ panels_per_lot: not directly in source; LOT_SIZE is a proxy. Validate.
-        df = df.with_columns(pl.col("_lot_size").cast(pl.Float64, strict=False).alias("panels_per_lot")).drop("_lot_size")
+        # ✅ panels_per_lot = (LotSize ÷ EaInSheet) × panels_per_sheet — LotSize is EA
+        # (data-verified 2026-07-15; ÷EaInSheet = 5 sheets, ×6 = the standard 30 panels).
+        # Consistent with model_master's maximum_lot_size_sht (sheets) × 6 path.
+        _sheets_per_lot = (
+            pl.when(pl.col("units_per_sheet") > 0)
+              .then(pl.col("_lot_size").cast(pl.Float64, strict=False) / pl.col("units_per_sheet"))
+              .otherwise(None)
+        )
+        if os.environ.get("REVPLAN_LOTSIZE_UNIT", "ea").strip().lower() == "sheets":
+            _sheets_per_lot = pl.col("_lot_size").cast(pl.Float64, strict=False)
+        df = df.with_columns(
+            (_sheets_per_lot * pl.col("panels_per_sheet")).alias("panels_per_lot")
+        ).drop("_lot_size")
     return _add_missing(df, ["panels_per_sheet", "panels_per_lot"])
 
 
