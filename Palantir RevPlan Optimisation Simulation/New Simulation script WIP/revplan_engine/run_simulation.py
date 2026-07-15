@@ -676,7 +676,9 @@ def run_simulation(params: SimulationParams,
 
 
 # NOTE: write_outputs() now lives in celonis_io.py (imported above). It pushes each
-# result table to the Data Pool as {OUTPUT_PREFIX}<name> via DataPool.create_table.
+# result table to the Data Pool as {OUTPUT_PREFIX}<name>, APPEND-ONLY: tables are
+# created on the first run and appended thereafter, so SIM_* keeps every run's rows
+# (select runs via allocation_run_id; SIM_run_tracker is the run registry).
 
 
 # ==============================================================================

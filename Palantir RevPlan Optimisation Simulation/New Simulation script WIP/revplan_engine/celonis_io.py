@@ -986,8 +986,20 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 # ==============================================================================
 # 7.  write_outputs  — push result tables back to the Data Pool.
 # ==============================================================================
+# APPEND-ONLY RUN HISTORY (2026-07-15): each SIM_* table is created once and
+# APPENDED on every later run — never dropped — so the tables keep EVERY run's
+# rows and the frontend can select runs via allocation_run_id (SIM_run_tracker
+# is the run registry: one appended row per run). The previous behaviour
+# (drop_if_exists on every run) kept only the latest run, clobbered OTHER
+# simulations' results, and could even leave tables on DIFFERENT runs (0-row
+# frames were skipped, so a stale table survived an otherwise-overwriting run).
+# Read-side rule that goes with this: every view/transformation filters on
+# allocation_run_id, defaulting to the latest SUCCESS row in SIM_run_tracker
+# per simulation_id.
+# Set CELONIS_OUTPUT_RESET=1 to intentionally drop + recreate all SIM_* tables
+# (schema change, dev cleanup) — this DISCARDS previous runs' rows.
 def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
-    print("=== Celonis write_outputs ===")
+    print("=== Celonis write_outputs (append-only run history) ===")
 
     # Refuse to write placeholder-stamped results. run_simulation stamps params.simulation_id
     # onto every allocation row + the run_tracker (run_id embeds it too), so writing a run
@@ -1006,12 +1018,17 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
         return
 
     p = pool()
+    reset = bool(os.environ.get("CELONIS_OUTPUT_RESET"))
+    if reset:
+        print("   ⚠ CELONIS_OUTPUT_RESET=1 — dropping + recreating SIM_* tables "
+              "(previous runs' rows are DISCARDED)")
 
     def _string_column_config(frame):
-        """Size each STRING column to its longest value (min 80, cap 4000) so a
-        create_table(force=True) keeps full strings instead of the VARCHAR(80) default
-        (which silently truncates). Returns a list of {columnName, columnType,
-        fieldLength} dicts, or None when there are no string columns."""
+        """Size each STRING column for the table CREATE (min 256, cap 4000, 2× the
+        longest current value) so later runs' appends fit without truncation — the
+        widths are fixed at creation, and appends must live inside them. Returns a
+        list of {columnName, columnType, fieldLength} dicts, or None when there
+        are no string columns."""
         str_cols = [c for c, dt in frame.schema.items() if dt == pl.Utf8]
         if not str_cols:
             return None
@@ -1022,22 +1039,61 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
             except Exception:  # noqa: BLE001 — str method name / dtype varies across polars
                 m = None
             cfg.append({"columnName": c, "columnType": "STRING",
-                        "fieldLength": max(80, min(int(m) + 20, 4000)) if m else 80})
+                        "fieldLength": max(256, min(int(m) * 2, 4000)) if m else 256})
         return cfg
+
+    def _find_table(name):
+        """Existing Data Pool table by name, or None. Tolerates both pycelonis
+        collection APIs (.find raising vs returning None) and falls back to a
+        plain scan so an API quirk can't misreport 'missing' as 'exists'."""
+        try:
+            tables = p.get_tables()
+        except Exception as ex:  # noqa: BLE001
+            print(f"   ⚠ get_tables() failed ({ex}); treating '{name}' as not yet created")
+            return None
+        try:
+            found = tables.find(name)
+            if found is not None:
+                return found
+        except Exception:  # noqa: BLE001 — .find raises PyCelonisNotFoundError when absent
+            pass
+        for t in tables:
+            if getattr(t, "name", None) == name:
+                return t
+        return None
 
     for name, df in results.items():
         table_name = f"{OUTPUT_PREFIX}{name}"
         if df.height == 0:
-            # pycelonis rejects a 0-row create ("Can't add empty data frame"); the empty/
-            # stubbed analyses land nothing rather than erroring. (If a downstream model
-            # needs the empty table to EXIST, create it once by hand with a schema.)
-            print(f"   ⏭  skip {table_name} (0 rows)")
+            # pycelonis rejects a 0-row create/append ("Can't add empty data frame").
+            # Under append-only history this is harmless: nothing is dropped, and a run
+            # that produced 0 rows simply contributes no rows for its allocation_run_id.
+            print(f"   ⏭  skip {table_name} (0 rows this run — consumers filter by allocation_run_id)")
             continue
         pdf = df.to_pandas()
+
+        # ---- append path: table exists and no reset requested -> add this run's rows
+        existing = None if reset else _find_table(table_name)
+        if existing is not None:
+            try:
+                existing.append(pdf)
+                print(f"   ✓ appended {table_name}  (+{df.height} rows)")
+            except Exception as ex:  # noqa: BLE001
+                # Do NOT fall back to drop/recreate — that would silently erase the run
+                # history this function exists to keep. Typical cause is schema drift
+                # (new/renamed column, string longer than the column width chosen at
+                # creation); resolve it deliberately.
+                print(f"   ✗ append to '{table_name}' failed: {ex}\n"
+                      "      → table NOT dropped (run history preserved). If the schema "
+                      "changed intentionally, re-run with CELONIS_OUTPUT_RESET=1 to "
+                      "recreate the SIM_* tables (discards previous runs).")
+            continue
+
+        # ---- create path: first ever run, or explicit CELONIS_OUTPUT_RESET=1
         cfg = _string_column_config(df)
-        # force=True: accept replacing the existing table. column_config: preserve real
-        # string lengths. Retry without column_config if this pycelonis build rejects its
-        # shape — still lands the data (falling back to the VARCHAR(80) default).
+        # column_config: preserve real string lengths (with append headroom). Retry
+        # without it if this pycelonis build rejects its shape — still lands the data
+        # (falling back to the VARCHAR(80) default).
         attempts = ([{"drop_if_exists": True, "force": True, "column_config": cfg}] if cfg else [])
         attempts.append({"drop_if_exists": True, "force": True})
         ok, last = False, None
@@ -1045,7 +1101,7 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
             try:
                 p.create_table(pdf, table_name, **kw)
                 note = "" if "column_config" in kw else "  (⚠ default VARCHAR(80))"
-                print(f"   ✓ wrote {table_name}  ({df.height} rows){note}")
+                print(f"   ✓ created {table_name}  ({df.height} rows){note}")
                 ok = True
                 break
             except Exception as ex:  # noqa: BLE001
