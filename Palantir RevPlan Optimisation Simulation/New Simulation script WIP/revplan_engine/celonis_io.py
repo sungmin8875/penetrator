@@ -128,6 +128,24 @@ ONHAND_TRANSIT_CODES = frozenset(
     if v.strip()
 )
 
+# Which SubinventoryCode rows of the coarse OnHand snapshot count as RAW MATERIAL stock
+# (read_material_inventories → material_depletion). The object mixes material rows
+# ('RAW-MTL', ItemNo = material code) with finished-goods rows ('FGI', ItemNo = MODEL_NO);
+# only the material rows belong in material_inventories.
+MATERIAL_SUBINV_CODES = frozenset(
+    v.strip().upper()
+    for v in os.environ.get("REVPLAN_MATERIAL_SUBINV_CODES", "RAW-MTL").split(",")
+    if v.strip()
+)
+
+# BOM CHASU (차수 / revision round) handling for read_model_boms:
+#   "per_key"          (default) — per (model, op, seq, material) keep the row with the
+#                       highest CHASU. Never double-counts a material, never drops one
+#                       that only appears in an older round.
+#   "latest_per_model" — keep only rows whose CHASU == the model's max CHASU. Correct if
+#                       every round re-lists the FULL bom; drops materials otherwise.
+BOM_CHASU_MODE = os.environ.get("REVPLAN_BOM_CHASU_MODE", "per_key").strip().lower()
+
 
 # ------------------------------------------------------------------------------
 # Source-name mapping — engine's logical PPS/RTS names -> actual names in THIS
@@ -153,6 +171,9 @@ TABLE_MAP: Dict[str, str] = {
     "PK1_JIG_MASTER":            "o_custom_JIGMaster",            # ✅ 2026-07-10 — ET-JIG capacity/qty (JigQty, JigCapa); NO model col — model comes from JIGDetail (see read_et_jig_master)
     "PK1_JIG_DETAIL":            "o_custom_JIGDetail",            # ✅ 2026-07-10 — per-jig target model (ModelNo); joined to JIGMaster via the OCPM relationship in read_et_jig_master
     "PK1_SHIPPING":              "o_custom_Shipping",             # ✅ 2026-07-15 — shipment lines (ItemNo=MODEL_NO, ShippedQuantity EA, ShippingDate) → shipped bucket of available_inventory
+    "PK1_BOM":                   "o_custom_BOM",                  # ✅ 2026-07-16 — model×op×material requirements (ReqQty per EA) → model_boms for material_depletion
+    "PK1_MATERIAL":              "o_custom_Material",             # ✅ 2026-07-16 — material master; only UOM is joined onto model_boms (BOM has no UOM column)
+    "PK1_PO_ARRIVE_PLAN":        "o_custom_PoArrivePlan",         # ✅ 2026-07-16 — PO arrival plan snapshot (BatchDate/BatchHour batched) → planned_material_arrivals
 }
 COLUMN_MAP: Dict[str, Dict[str, str]] = {
     "PK1_MPLAN": {
@@ -214,6 +235,25 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "SHIPPING_DATE": "ShippingDate",     # ✅ physical ship event; precedes record CreationDate (posting lag) — the bucketing key
         "VERSION_NAME":  "VersionName",      # ✅ SALES_RESULT (shipments) / SALES_RESULT_RTN (returns — subtract)
         "ORGANIZATION_CODE": "OrganizationCode",  # PK1 (unused for now; single site)
+    },
+    "PK1_BOM": {
+        "MODEL_NO":       "ModelNo",        # MODEL_NO form (SPCCE3000C.K000) → joins allocation model_id directly
+        "MATERIAL_NO":    "MaterialNo",     # material code (SMFICF00001-Z / 5PPP01253A style)
+        "WORK_SEQ":       "WorkSeq",        # float in source (61.0) — cast to the allocation's Int32 sequence for the join
+        "OPERATION_CODE": "OperationCode",  # joins allocation process_id
+        "CHASU":          "CHASU",          # 차수 (BOM revision round) — deduped in read_model_boms
+        "REQ_QTY":        "ReqQty",         # required qty PER UNIT (EA) — × final_production_units = consumption
+    },
+    "PK1_MATERIAL": {
+        "MATERIAL_NO": "MaterialNo",
+        "UOM":         "UOM",
+    },
+    "PK1_PO_ARRIVE_PLAN": {
+        "PART_NO":    "PartNo",     # material code — same key space as BOM MaterialNo
+        "PLAN_DATE":  "PlanDate",   # arrival date (datetime at midnight) → cast to Date
+        "QTY":        "QTY",
+        "BATCH_DATE": "BatchDate",  # snapshot batch — read_planned_material_arrivals keeps the latest batch only
+        "BATCH_HOUR": "BatchHour",
     },
     "PK1_ERP_ONHAND_LOT": {
         "MODEL_CODE":        "ModelCode",          # ✅ MODEL_NO form (MGS832G2 / SPCCP30021.KMC2) → model_id, direct join
@@ -1396,6 +1436,161 @@ def read_et_jig_master(params) -> pl.DataFrame:
     return out
 
 
+# ------------------------------------------------------------------------------
+# 5c.  MATERIAL INPUTS  — the three frames material_depletion.py consumes
+#      (wired 2026-07-16; unlocks the 자재 쇼티지 screen — M510N 프리프레그/카파포일).
+#      Contracts come from the verbatim Palantir module:
+#        model_boms(model_id, process_id, work_sequence, material_id, required_quantity, uom)
+#        material_inventories(material_id, onhand_quantity)
+#        planned_material_arrivals(material_id, plan_date, quantity)
+# ------------------------------------------------------------------------------
+_BOM_SCHEMA = {"model_id": pl.Utf8, "process_id": pl.Utf8, "work_sequence": pl.Int32,
+               "material_id": pl.Utf8, "required_quantity": pl.Float64, "uom": pl.Utf8}
+_MATINV_SCHEMA = {"material_id": pl.Utf8, "onhand_quantity": pl.Float64}
+_ARRIVALS_SCHEMA = {"material_id": pl.Utf8, "plan_date": pl.Date, "quantity": pl.Float64}
+
+
+def _latest_batch(df: pl.DataFrame, what: str) -> pl.DataFrame:
+    """Keep only the newest BatchDate+BatchHour snapshot of a batch-stamped object.
+
+    o_custom_OnHand and o_custom_PoArrivePlan are FULL periodic snapshots (like
+    WipDaily): every batch re-states the whole picture, so mixing batches would
+    multiply quantities. BatchHour is a zero-padded string ('07') — lexicographic
+    max is the numeric max."""
+    if df.height == 0 or "batch_date" not in df.columns:
+        return df
+    latest_date = df["batch_date"].max()
+    df = df.filter(pl.col("batch_date") == latest_date)
+    if "batch_hour" in df.columns and df["batch_hour"].null_count() < df.height:
+        df = df.filter(pl.col("batch_hour") == df["batch_hour"].max())
+    print(f"   ✓ {what}: latest snapshot batch {latest_date} "
+          f"h={df['batch_hour'][0] if 'batch_hour' in df.columns and df.height else '?'} "
+          f"({df.height} rows)")
+    return df
+
+
+def read_model_boms(params) -> pl.DataFrame:
+    """Model×operation×material requirements from PPS PK1_BOM (o_custom_BOM).
+
+    ReqQty is the per-EA usage (observed 1.5e-06 scale — per-unit fractions of a
+    sheet/roll); material_depletion multiplies it by final_production_units, so no
+    unit conversion happens here. BOM carries no UOM — joined from PK1_MATERIAL
+    (display-only downstream; null-safe). CHASU (revision round) is deduped per
+    BOM_CHASU_MODE so one step never counts a material twice."""
+    try:
+        df = _pull("PK1_BOM", {
+            "model_id":          "MODEL_NO",
+            "process_id":        "OPERATION_CODE",
+            "work_sequence":     "WORK_SEQ",
+            "material_id":       "MATERIAL_NO",
+            "required_quantity": "REQ_QTY",
+            "chasu":             "CHASU",
+        })
+    except Exception as ex:  # noqa: BLE001
+        return _empty("model_boms", _BOM_SCHEMA, f"PK1_BOM pull failed: {ex}")
+    if df.height == 0:
+        return _empty("model_boms", _BOM_SCHEMA, "o_custom_BOM returned no rows")
+
+    df = df.filter(pl.col("model_id").is_not_null() & pl.col("material_id").is_not_null())
+    df = df.with_columns([
+        pl.col("work_sequence").cast(pl.Float64, strict=False).cast(pl.Int32),  # 61.0 → 61, matches allocation.sequence dtype
+        pl.col("required_quantity").cast(pl.Float64, strict=False),
+        pl.col("chasu").cast(pl.Float64, strict=False).fill_null(0.0),
+    ])
+    if BOM_CHASU_MODE == "latest_per_model":
+        df = df.filter(pl.col("chasu") == pl.col("chasu").max().over("model_id"))
+    else:  # per_key (default)
+        df = df.sort("chasu", descending=True).unique(
+            subset=["model_id", "process_id", "work_sequence", "material_id"], keep="first")
+
+    # UOM enrichment from the material master (guarded — nulls are fine downstream).
+    try:
+        uom = _pull("PK1_MATERIAL", {"material_id": "MATERIAL_NO", "uom": "UOM"}, distinct=True)
+        uom = uom.unique(subset=["material_id"], maintain_order=True)
+        df = df.join(uom, on="material_id", how="left")
+    except Exception as ex:  # noqa: BLE001
+        print(f"   ⚠ model_boms: PK1_MATERIAL UOM join skipped ({ex}) — uom left null")
+        df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("uom"))
+
+    out = df.select(["model_id", "process_id", "work_sequence", "material_id",
+                     "required_quantity", "uom"])
+    print(f"   ✓ model_boms: {out.height} rows, {out['model_id'].n_unique()} models, "
+          f"{out['material_id'].n_unique()} materials (CHASU mode={BOM_CHASU_MODE})")
+    return out
+
+
+def read_material_inventories(params) -> pl.DataFrame:
+    """Raw-material on-hand from the coarse OnHand snapshot (PK1_ONHAND_TRN / o_custom_OnHand).
+
+    The object mixes RAW-MTL rows (ItemNo = material code — what we want) with FGI
+    rows (ItemNo = MODEL_NO — finished goods, already covered by available_inventory),
+    filtered via MATERIAL_SUBINV_CODES. Snapshot table → latest BatchDate/BatchHour
+    only, then summed per material (the analysis treats it as one global opening
+    inventory, exactly like Palantir's material_inventories input)."""
+    try:
+        df = _pull("PK1_ONHAND_TRN", {
+            "material_id":     "ITEM_NO",
+            "onhand_quantity": "ONHAND_QTY",
+            "_subinv":         "SUBINVENTORY_CODE",
+            "batch_date":      "BATCH_DATE",
+            "batch_hour":      "BATCH_HOUR",
+        })
+    except Exception as ex:  # noqa: BLE001
+        return _empty("material_inventories", _MATINV_SCHEMA, f"PK1_ONHAND_TRN pull failed: {ex}")
+    df = _latest_batch(df, "material_inventories (OnHand)")
+    df = df.filter(pl.col("_subinv").cast(pl.Utf8).str.to_uppercase().is_in(list(MATERIAL_SUBINV_CODES)))
+    if df.height == 0:
+        return _empty("material_inventories", _MATINV_SCHEMA,
+                      f"no OnHand rows in material sub-buckets {sorted(MATERIAL_SUBINV_CODES)}")
+    out = (df.with_columns(pl.col("onhand_quantity").cast(pl.Float64, strict=False))
+             .group_by("material_id")
+             .agg(pl.col("onhand_quantity").sum()))
+    print(f"   ✓ material_inventories: {out.height} materials, "
+          f"{out['onhand_quantity'].sum():,.0f} total qty {sorted(MATERIAL_SUBINV_CODES)}")
+    return out
+
+
+def read_planned_material_arrivals(params) -> pl.DataFrame:
+    """Planned PO arrivals from PK1_PO_ARRIVE_PLAN (o_custom_PoArrivePlan).
+
+    Snapshot table → latest BatchDate/BatchHour batch only. Arrivals dated ON OR
+    BEFORE the snapshot date are dropped: those receipts are already inside the
+    OnHand snapshot read_material_inventories starts from, and material_depletion
+    adds arrivals ON TOP of initial inventory — keeping them would double-count.
+    plan_date is cast to Date so the module's `plan_date <= allocated_date`
+    comparison matches the engine's pl.Date allocated_date."""
+    try:
+        df = _pull("PK1_PO_ARRIVE_PLAN", {
+            "material_id": "PART_NO",
+            "plan_date":   "PLAN_DATE",
+            "quantity":    "QTY",
+            "batch_date":  "BATCH_DATE",
+            "batch_hour":  "BATCH_HOUR",
+        })
+    except Exception as ex:  # noqa: BLE001
+        return _empty("planned_material_arrivals", _ARRIVALS_SCHEMA,
+                      f"PK1_PO_ARRIVE_PLAN pull failed: {ex}")
+    df = _latest_batch(df, "planned_material_arrivals (PoArrivePlan)")
+    if df.height == 0:
+        return _empty("planned_material_arrivals", _ARRIVALS_SCHEMA,
+                      "o_custom_PoArrivePlan returned no rows")
+    snapshot_date = df.select(pl.col("batch_date").cast(pl.Date, strict=False).max()).item()
+    out = (df.with_columns([
+                pl.col("plan_date").cast(pl.Date, strict=False),
+                pl.col("quantity").cast(pl.Float64, strict=False),
+           ])
+           .filter(pl.col("plan_date").is_not_null() & (pl.col("plan_date") > snapshot_date))
+           .select(["material_id", "plan_date", "quantity"]))
+    if out.height == 0:
+        return _empty("planned_material_arrivals", _ARRIVALS_SCHEMA,
+                      f"no arrivals dated after snapshot {snapshot_date} — "
+                      "past-dated plans are already inside the OnHand snapshot")
+    print(f"   ✓ planned_material_arrivals: {out.height} rows, "
+          f"{out['material_id'].n_unique()} materials, "
+          f"{out['plan_date'].min()} → {out['plan_date'].max()} (after snapshot {snapshot_date})")
+    return out
+
+
 # ==============================================================================
 # 6.  read_inputs  — assemble the dict the engine consumes.
 # ==============================================================================
@@ -1413,13 +1608,13 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
         "equipment_constraints": read_equipment_constraints(params),  # ❌ placeholder (no NEGATIVE source)
         "equipment_to_process":  read_equipment_to_process(params),   # ✅ o_custom_EquipmentConstraints (positive map)
         "et_jig_master":         read_et_jig_master(params),          # ✅ 2026-07-10 — o_custom_JIGMaster (feeds compute_et_jig_risk)
+        # material trio (2026-07-16) — consumed by compute_material_depletion:
+        "model_boms":                read_model_boms(params),                # ✅ o_custom_BOM (+ UOM from o_custom_Material)
+        "material_inventories":      read_material_inventories(params),      # ✅ o_custom_OnHand RAW-MTL rows, latest batch
+        "planned_material_arrivals": read_planned_material_arrivals(params), # ✅ o_custom_PoArrivePlan, latest batch, future-dated only
     }
-    # NOTE — stub-analysis inputs (port alongside the stubs in run_simulation.py):
-    #   model_boms          ✅  <- PK1_BOM   (MODEL_NO, MATERIAL_NO, WORK_SEQ, OPERATION_CODE, CHASU, REQ_QTY)
-    #   materials           ✅  <- PK1_MATERIAL (MATERIAL_NO, MATERIAL_DESC, UOM, VENDOR_LEAD_TIME, THICKNESS)
-    #   material_inventories ⚠️ <- PK1_DAILY_INVENTORY / PK1_ERP_ONHAND_LOT
-    #   planned_material_arrivals ❌  (no PO/receipt feed)
-    #   et_jig_master       ✅  <- o_custom_JIGMaster (wired 2026-07-10; see read_et_jig_master)
+    # NOTE — remaining stub-analysis inputs: production_risk_reconciliation needs no
+    # new sources (it reads other analyses' outputs) — port it alongside its stub.
 
 
 # ==============================================================================

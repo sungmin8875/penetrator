@@ -48,6 +48,7 @@ from . import monthly_fulfillment as _mf_mod
 from . import et_jig_risk as _ejr_mod
 from . import capacity_shortage as _cs_mod
 from . import demand_shortfall as _dsf_mod
+from . import material_depletion as _md_mod
 from .allocation_engine import (
     allocate_month_by_month,
     ALLOCATION_OUTPUT_SCHEMA,
@@ -586,9 +587,62 @@ def compute_capacity_shortage(allocation, failed):
 
 
 def compute_material_depletion(allocation, material_inventories, model_boms, planned_material_arrivals):
-    """🧩 PORT NEXT from material_depletion.py -> 4 tables."""
-    print("   🧩 STUB: material_depletion (returning empty)")
-    return pl.DataFrame(), pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+    """PORTED FROM material_depletion.py (run verbatim via the shim, 2026-07-16).
+
+    Runs the ENRICHED allocation (needs final_production_units) against the BOM to
+    emit 4 tables — the 자재 쇼티지 screen's data (M510N 프리프레그/카파포일 story):
+      * material_consumption_events — one row per allocation-step × material, with a
+        running inventory before/after and is_shortage(with/without planned arrivals).
+      * material_depletion_events   — date-level ≥0→<0 inventory transitions per
+        material (WITH arrivals), incl. shortfall qty and the lots depleting it.
+      * constrained_production_lots — lots whose steps hit a material shortage, with
+        the furthest completable sequence.
+      * data_quality_issues         — BOM materials with NO inventory record
+        (MISSING_INVENTORY), scoped to models actually in the revenue plan.
+
+    ⚠️ MLWB DIVERGENCES (wrapper only — the ported module is untouched):
+      * final_production_units is only populated by the financial enrichment branch;
+        when absent/null it falls back to units_produced (Palantir's financial join
+        set final_production_units = the lot's units_produced anyway).
+      * List columns (depleting_lot_ids, constraining_material_ids, …) are joined to
+        comma-separated strings — the Data Pool push can't take polars List columns.
+    """
+    if allocation.height == 0 or model_boms.height == 0:
+        print("   ⏭  material_depletion skipped: "
+              f"allocation={allocation.height} rows, model_boms={model_boms.height} rows")
+        return pl.DataFrame(), pl.DataFrame(), pl.DataFrame(), pl.DataFrame()
+
+    events = allocation
+    if "final_production_units" not in events.columns:
+        events = events.with_columns(pl.lit(None, dtype=pl.Int32).alias("final_production_units"))
+    if "units_produced" in events.columns:
+        events = events.with_columns(
+            pl.col("final_production_units").fill_null(pl.col("units_produced")))
+
+    out_cons, out_depl, out_constr, out_dq = (
+        InMemoryOutput(), InMemoryOutput(), InMemoryOutput(), InMemoryOutput())
+    _md_mod.compute(
+        out_cons, out_depl, out_constr, out_dq,
+        InMemoryInput(events),
+        InMemoryInput(material_inventories),
+        InMemoryInput(model_boms),
+        InMemoryInput(planned_material_arrivals),
+    )
+
+    def _stringify_lists(df):
+        if df is None:
+            return pl.DataFrame()
+        list_cols = [c for c, dt in df.schema.items() if isinstance(dt, pl.List)]
+        if list_cols:
+            df = df.with_columns([
+                pl.col(c).cast(pl.List(pl.Utf8)).list.join(",").alias(c) for c in list_cols])
+        return df
+
+    res = tuple(_stringify_lists(o.result) for o in (out_cons, out_depl, out_constr, out_dq))
+    print(f"   ✓ material_depletion: {res[0].height} consumption events, "
+          f"{res[1].height} depletion events, {res[2].height} constrained lots, "
+          f"{res[3].height} data-quality issues")
+    return res
 
 
 def compute_et_jig_risk(new_lots, et_jig_master, net_demand, model_priorities, allocation):
@@ -712,6 +766,17 @@ def run_simulation(params: SimulationParams,
     et_jig_risk = compute_et_jig_risk(
         eng.new_lots, inputs["et_jig_master"], net_demand, model_priorities, eng.allocation)
 
+    # --- Tier 3.5: material depletion (BOM × allocation) -----------------------
+    #   eng.allocation is already enriched (final_production_units when economics
+    #   are present; the wrapper falls back to units_produced otherwise).
+    (material_consumption_events, material_depletion_events,
+     constrained_production_lots, material_data_quality) = compute_material_depletion(
+        eng.allocation,
+        inputs.get("material_inventories", pl.DataFrame()),
+        inputs.get("model_boms", pl.DataFrame()),
+        inputs.get("planned_material_arrivals", pl.DataFrame()),
+    )
+
     # --- Tier 4: demand shortfall (stubbed) -----------------------------------
     demand_shortfall = compute_demand_shortfall(
         eng.allocation, eng.failed, eng.new_lots, net_demand, model_priorities,
@@ -742,11 +807,16 @@ def run_simulation(params: SimulationParams,
         "run_tracker": eng.run_tracker,
         "monthly_fulfillment_wide": fulfillment_wide,
         "monthly_fulfillment_long": fulfillment_long,
-        # stubbed analyses (empty until ported):
         "equipment_capacity_shortages": equipment_shortages,
         "lot_waiting_periods": lot_waiting_periods,
         "et_jig_capacity_risk": et_jig_risk,
         "demand_shortfall": demand_shortfall,
+        # material depletion (ported 2026-07-16) — the 자재 쇼티지 screen tables:
+        "material_consumption_events": material_consumption_events,
+        "material_depletion_events": material_depletion_events,
+        "constrained_production_lots": constrained_production_lots,
+        "material_data_quality_issues": material_data_quality,
+        # stubbed analyses (empty until ported):
         "production_risk_reconciliation": risk_reconciliation,
     }
 
