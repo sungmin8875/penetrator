@@ -224,6 +224,9 @@ def build_model_process_steps_lookup(
                 # used by virtual_lot_creator for a real lead-time estimate.
                 "run_lt": row.get("run_lt"),
                 "wait_lt": row.get("wait_lt"),
+                # Planner's own per-step Plan LT (hours; 99.1% filled — 2026-07-16).
+                # Preferred duration source for the outsourced pass-through.
+                "plan_lt": row.get("plan_lt"),
             }
         )
 

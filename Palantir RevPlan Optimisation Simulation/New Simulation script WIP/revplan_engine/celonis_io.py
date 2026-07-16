@@ -713,13 +713,22 @@ def read_wip_lots(params) -> pl.DataFrame:
     }
     df = None
     if WIP_MODE != "legacy":
+        # receipt_target_day: the lot's real due date (WipDaily.ReceiptTargetDay,
+        # ~58% filled — G4 2026-07-16). Urgent lots use it as their target month
+        # instead of the synthetic start-month stamp; null falls back downstream.
         try:
             df = _pull("RTSP_WIP_N", {**cols,
-                                      "_snapshot_date": "SnapshotDate",
-                                      "_site":          "PlanningSiteCode"})
-        except Exception as ex:  # noqa: BLE001
-            print(f"   ⚠ wip_lots: SnapshotDate/PlanningSiteCode not readable ({type(ex).__name__}); "
-                  "falling back to the legacy raw read (NO snapshot/site filter)")
+                                      "receipt_target_day": "ReceiptTargetDay",
+                                      "_snapshot_date":     "SnapshotDate",
+                                      "_site":              "PlanningSiteCode"})
+        except Exception:  # noqa: BLE001 — retry without the due-date column
+            try:
+                df = _pull("RTSP_WIP_N", {**cols,
+                                          "_snapshot_date": "SnapshotDate",
+                                          "_site":          "PlanningSiteCode"})
+            except Exception as ex:  # noqa: BLE001
+                print(f"   ⚠ wip_lots: SnapshotDate/PlanningSiteCode not readable ({type(ex).__name__}); "
+                      "falling back to the legacy raw read (NO snapshot/site filter)")
     if df is None:
         df = _pull("RTSP_WIP_N", cols)
     if df.height:
@@ -781,40 +790,39 @@ def _explode_wip_remaining_route(current: pl.DataFrame) -> pl.DataFrame:
     Lots whose model has no routing keep their single current-position row (the old
     behaviour) so they are not silently dropped.
     """
-    try:
-        rt = None
+    rt_base = {
+        "model_id":       "PRODID",
+        "_route_seq":     "SEQ",
+        "_route_process": "PROCID",
+        "_route_group":   "OP_MACHINE_CODE",
+    }
+    rt = None
+    for extra in ({"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt"},
+                  {"run_lt": "RUN_LT", "wait_lt": "WAIT_LT"},
+                  {}):
         try:
-            rt = _pull("RTSP_MODEL_ROUTING_M", {
-                "model_id":           "PRODID",
-                "_route_seq":         "SEQ",
-                "_route_process":     "PROCID",
-                "_route_group":       "OP_MACHINE_CODE",
-                "run_lt":             "RUN_LT",
-                "wait_lt":            "WAIT_LT",
-            })
-        except Exception:  # noqa: BLE001 — Run/Wait columns may be absent
-            rt = _pull("RTSP_MODEL_ROUTING_M", {
-                "model_id":           "PRODID",
-                "_route_seq":         "SEQ",
-                "_route_process":     "PROCID",
-                "_route_group":       "OP_MACHINE_CODE",
-            })
-    except Exception as ex:  # noqa: BLE001
+            rt = _pull("RTSP_MODEL_ROUTING_M", {**rt_base, **extra})
+            break
+        except Exception as ex:  # noqa: BLE001
+            last_ex = ex
+    if rt is None:
         print(f"   ⚠ wip_lots: routing not readable for the remaining-route explosion "
-              f"({type(ex).__name__}); keeping current-position rows only")
+              f"({type(last_ex).__name__}); keeping current-position rows only")
         return current
     if rt.height == 0:
         print("   ⚠ wip_lots: routing empty; keeping current-position rows only")
         return current
 
     rt = rt.with_columns(pl.col("_route_seq").cast(pl.Int64, strict=False).fill_null(0))
-    for c in ("run_lt", "wait_lt"):
+    for c in ("run_lt", "wait_lt", "plan_lt"):
         if c in rt.columns:
             rt = rt.with_columns(pl.col(c).cast(pl.Float64, strict=False))
 
-    lots = current.select(["lot_id", "model_id", "sequence",
-                           "latest_sheet_quantity", "latest_unit_quantity",
-                           "equipment_group_id"]).rename({
+    lot_cols = ["lot_id", "model_id", "sequence",
+                "latest_sheet_quantity", "latest_unit_quantity", "equipment_group_id"]
+    if "receipt_target_day" in current.columns:
+        lot_cols.append("receipt_target_day")   # due date rides every exploded step
+    lots = current.select(lot_cols).rename({
         "sequence": "_current_seq",
         "equipment_group_id": "_current_eqpt",
     })
@@ -902,18 +910,25 @@ def read_planned_process_steps(params) -> pl.DataFrame:
     # (RunLt/WaitLt) but their presence is UNCONFIRMED (plan prerequisite P1); _pull errors
     # on a missing column, so try WITH them and fall back WITHOUT (lead-time proxy stays).
     df = None
-    try:
-        df = _pull("RTSP_MODEL_ROUTING_M", {**base_cols, "run_lt": "RUN_LT", "wait_lt": "WAIT_LT"})
-    except Exception as ex:  # noqa: BLE001
-        print(f"   ⚠ planned_process_steps: per-step lead-time columns (RunLt/WaitLt) not "
-              f"readable ({type(ex).__name__}); proceeding without them (lead-time proxy stays)")
-        df = _pull("RTSP_MODEL_ROUTING_M", base_cols)
+    for extra in ({"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt"},
+                  {"run_lt": "RUN_LT", "wait_lt": "WAIT_LT"},
+                  {}):
+        try:
+            df = _pull("RTSP_MODEL_ROUTING_M", {**base_cols, **extra})
+            break
+        except Exception as ex:  # noqa: BLE001
+            last_ex = ex
+    if df is None:
+        raise last_ex
+    if "plan_lt" not in df.columns and "run_lt" not in df.columns:
+        print("   ⚠ planned_process_steps: per-step lead-time columns (PlanLt/RunLt/WaitLt) not "
+              "readable; proceeding without them (lead-time proxy stays)")
     if df.height:
         # ⚠️ is_from_latest_production_plan: not a source column. The engine HARD-FILTERS
         #    on it (==True), so default True to pass rows through (revisit when you have a
         #    'latest plan' marker, else you allocate against stale routings).
         df = df.with_columns(pl.lit(True).alias("is_from_latest_production_plan"))
-        for c in ("run_lt", "wait_lt"):
+        for c in ("run_lt", "wait_lt", "plan_lt"):
             if c in df.columns:
                 df = df.with_columns(pl.col(c).cast(pl.Float64, strict=False))
     # ❌ q1_panel_in_seconds / mpi_Q1_wait_time_in_seconds: DERIVED event-time analytics.
@@ -922,7 +937,7 @@ def read_planned_process_steps(params) -> pl.DataFrame:
     #    a separate follow-up. run_lt/wait_lt default null when the columns are absent.
     return _add_missing(df, ["grouping_model", "is_from_latest_production_plan",
                              "q1_panel_in_seconds", "mpi_Q1_wait_time_in_seconds",
-                             "run_lt", "wait_lt"])
+                             "run_lt", "wait_lt", "plan_lt"])
 
 
 def _route_plan_lt_seconds(models: pl.DataFrame) -> Optional[pl.DataFrame]:
@@ -943,28 +958,43 @@ def _route_plan_lt_seconds(models: pl.DataFrame) -> Optional[pl.DataFrame]:
     if os.environ.get("REVPLAN_LEADTIME_SOURCE", "planlt").strip().lower() == "adjust":
         print("   ⚠ REVPLAN_LEADTIME_SOURCE=adjust — ADJUST_LEADTIME proxy forced for all models")
         return None
+    # Prefer the routing's own per-step PlanLt column (99.1% filled, data-verified
+    # 2026-07-16) — the planner's number, no formula to defend. Fall back to the
+    # customer-validated computation RunLt×sheets+WaitLt when PlanLt isn't readable.
+    rt, has_planlt = None, False
     try:
         rt = _pull("RTSP_MODEL_ROUTING_M", {
             "model_id": "PRODID",
-            "run_lt":   "RUN_LT",
-            "wait_lt":  "WAIT_LT",
+            "plan_lt":  "PlanLt",
         })
-    except Exception as ex:  # noqa: BLE001
-        print(f"   ⚠ Plan LT: routing Run/Wait not readable ({type(ex).__name__}); "
-              "ADJUST_LEADTIME fallback for all models")
-        return None
+        has_planlt = True
+    except Exception:  # noqa: BLE001 — PlanLt column absent -> computed fallback
+        try:
+            rt = _pull("RTSP_MODEL_ROUTING_M", {
+                "model_id": "PRODID",
+                "run_lt":   "RUN_LT",
+                "wait_lt":  "WAIT_LT",
+            })
+        except Exception as ex:  # noqa: BLE001
+            print(f"   ⚠ Plan LT: routing PlanLt/Run/Wait not readable ({type(ex).__name__}); "
+                  "ADJUST_LEADTIME fallback for all models")
+            return None
     if rt.height == 0:
         print("   ⚠ Plan LT: routing returned no rows; ADJUST_LEADTIME fallback for all models")
         return None
-    default_sheets = 5.0  # config defaults: 30 panels/lot ÷ 6 panels/sheet
-    rt = rt.with_columns([
-        pl.col("run_lt").cast(pl.Float64, strict=False),
-        pl.col("wait_lt").cast(pl.Float64, strict=False),
-    ]).join(models.select(["model_id", "maximum_lot_size_sht"]), on="model_id", how="left")
-    rt = rt.with_columns(
-        (pl.col("run_lt").fill_null(0.0) * pl.col("maximum_lot_size_sht").fill_null(default_sheets)
-         + pl.col("wait_lt").fill_null(0.0)).alias("_step_lt_h")
-    )
+    if has_planlt:
+        rt = rt.with_columns(
+            pl.col("plan_lt").cast(pl.Float64, strict=False).fill_null(0.0).alias("_step_lt_h"))
+    else:
+        default_sheets = 5.0  # config defaults: 30 panels/lot ÷ 6 panels/sheet
+        rt = rt.with_columns([
+            pl.col("run_lt").cast(pl.Float64, strict=False),
+            pl.col("wait_lt").cast(pl.Float64, strict=False),
+        ]).join(models.select(["model_id", "maximum_lot_size_sht"]), on="model_id", how="left")
+        rt = rt.with_columns(
+            (pl.col("run_lt").fill_null(0.0) * pl.col("maximum_lot_size_sht").fill_null(default_sheets)
+             + pl.col("wait_lt").fill_null(0.0)).alias("_step_lt_h")
+        )
     agg = (
         rt.group_by("model_id")
           .agg(pl.col("_step_lt_h").sum().alias("_plan_lt_h"))
@@ -976,7 +1006,8 @@ def _route_plan_lt_seconds(models: pl.DataFrame) -> Optional[pl.DataFrame]:
           .select(["model_id", "_lt_plan_s"])
     )
     n = agg.filter(pl.col("_lt_plan_s").is_not_null()).height
-    print(f"   ✓ Plan LT: route-derived lead time for {n} models (Σ RunLt×sheets + WaitLt, h→s)")
+    src = "Σ PlanLt column" if has_planlt else "Σ RunLt×sheets + WaitLt (computed fallback)"
+    print(f"   ✓ Plan LT: route-derived lead time for {n} models ({src}, h→s)")
     return agg
 
 

@@ -69,12 +69,12 @@ def install_plan_lt_lookup(
     AllocationState (a plain dataclass) avoids threading a new parameter
     through the ported call chain.
     """
-    lut: Dict[Tuple[str, str], Tuple[Optional[float], Optional[float]]] = {}
+    lut: Dict[Tuple[str, str], Tuple[Optional[float], Optional[float], Optional[float]]] = {}
     for model_id, steps in (model_process_steps_lookup or {}).items():
         for s in steps:
             pid = s.get("process_id")
             if pid:
-                lut[(model_id, pid)] = (s.get("run_lt"), s.get("wait_lt"))
+                lut[(model_id, pid)] = (s.get("run_lt"), s.get("wait_lt"), s.get("plan_lt"))
     state.outsourced_plan_lt_lookup = lut
     state.outsourced_assumed_ops = {}
 
@@ -87,17 +87,24 @@ def _plan_lt_days(
 ) -> int:
     """Planned outsourced duration in whole days for one step (minimum 1).
 
-    Plan LT = RunLt × sheets + WaitLt (hours; Run per-sheet, Wait per-lot —
-    customer-validated 2026-07 workshop). Falls back to
-    `outsourced_step_days_default` when the routing has no Run/Wait for the op.
+    Duration source, best first (2026-07-16): the routing's own per-step PlanLt
+    column (99.1% filled — the planner's number), then the customer-validated
+    computation RunLt × sheets + WaitLt (hours; Run per-sheet, Wait per-lot),
+    then `outsourced_step_days_default`.
     """
+    plan_lt = lot_step.get("plan_lt")
     run_lt = lot_step.get("run_lt")
     wait_lt = lot_step.get("wait_lt")
-    if run_lt is None and wait_lt is None:
+    if plan_lt is None and run_lt is None and wait_lt is None:
         lut = getattr(state, "outsourced_plan_lt_lookup", None) or {}
-        run_lt, wait_lt = lut.get((model_id, lot_step.get("process_id")), (None, None))
-    sheets = lot_step.get(config.columns.sheet_quantity) or 0
-    total_hours = float(run_lt or 0.0) * float(sheets) + float(wait_lt or 0.0)
+        entry = lut.get((model_id, lot_step.get("process_id")), (None, None, None))
+        run_lt, wait_lt = entry[0], entry[1]
+        plan_lt = entry[2] if len(entry) > 2 else None
+    if plan_lt is not None and float(plan_lt) > 0:
+        total_hours = float(plan_lt)
+    else:
+        sheets = lot_step.get(config.columns.sheet_quantity) or 0
+        total_hours = float(run_lt or 0.0) * float(sheets) + float(wait_lt or 0.0)
     if total_hours <= 0:
         return max(1, int(config.constraints.outsourced_step_days_default))
     return max(1, ceil(total_hours / _HOURS_PER_DAY))

@@ -18,7 +18,7 @@ capacity and (b) skips the now-complete urgent lots automatically (0 remaining s
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List
 
 from .config import AllocationConfig
@@ -82,13 +82,35 @@ def run_urgent_prepass(
     if not ordered:
         return pre_allocated_by_model
 
-    # Earliest demand month per model — used only as `target_month` for the
-    # hold-until-target-month final-step path and delay stats (urgent WIP lots carry no
-    # intrinsic target month). Falls back to the sim start month.
+    # Earliest demand month per model — one of the target_month fallbacks below.
     earliest_demand_month: Dict[str, str] = {}
     for (m, mon) in demand_by_model_month.keys():
         if m not in earliest_demand_month or mon < earliest_demand_month[m]:
             earliest_demand_month[m] = mon
+
+    def _lot_target_month(first_step: dict, model_id: str) -> str:
+        """Urgent lot's target month, best available truth first (2026-07-16):
+        1. the lot's REAL due date — WipDaily.ReceiptTargetDay (~58% filled), carried
+           on every step row by read_wip_lots;
+        2. the model's earliest demand month — tried under model_id AND its
+           grouping_model (the demand dict is grouping-keyed, so a model_id-only
+           lookup missed and everything fell to the start month);
+        3. the sim start month (last resort — this synthetic stamp made any lot with
+           more remaining steps than the month's runway 'delayed' by construction).
+        """
+        rt = first_step.get("receipt_target_day")
+        if rt is not None:
+            if isinstance(rt, (datetime, date)):
+                return rt.strftime("%Y%m")
+            s = str(rt).strip()
+            if len(s) >= 7 and s[:4].isdigit():        # '2026-05-29…' -> '202605'
+                return s[:4] + s[5:7]
+        month = earliest_demand_month.get(model_id)
+        if month is None and model_metadata_lookup and model_id in model_metadata_lookup:
+            grouping = model_metadata_lookup[model_id].get("grouping_model")
+            if grouping:
+                month = earliest_demand_month.get(grouping)
+        return month or config.constraints.start_month
 
     print(f"\n=== Phase 0 (Tier 1): {len(ordered)} urgent WIP lots, oldest-created first ===")
     for lot_id in ordered:
@@ -96,7 +118,7 @@ def run_urgent_prepass(
         model_id = steps[0].get("model_id") if steps else None
         if not model_id:
             continue
-        target_month = earliest_demand_month.get(model_id, config.constraints.start_month)
+        target_month = _lot_target_month(steps[0], model_id)
 
         produced = 0
         while True:
