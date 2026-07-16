@@ -165,8 +165,18 @@ def create_virtual_lots(
         daily_capacity_lots = defaults.daily_capacity_lots
 
     lead_time_days = model_metadata.get("lead_time_days", defaults.lead_time_days)
-    base_model = model_metadata.get("base_model", model_id)
-    grouping_model = model_metadata.get("grouping_model", model_id)
+    # ⚠️ MLWB DIVERGENCE (2026-07-16): null-safe fallback (`or model_id`), NOT
+    # `.get(key, model_id)`. The metadata dict ALWAYS contains these keys — with
+    # value None when the model master's GroupingModel is NULL (the known DQ gap)
+    # — so `.get`'s default never fired and EVERY model got grouping_model=None.
+    # The lot-start throttle is keyed (grouping_model, date), so all virtual lots
+    # of ALL models shared ONE (None, date) daily budget, each model chaining
+    # after the max date of every other; with ~37k lots at a few per day, start
+    # dates marched ~50 years out ("reached 2082" horizon failures, TargetLot-
+    # StartDate 2041 in earlier runs). get_model_lookup_key in the engine already
+    # used the null-safe idiom — this aligns the VL creator with it.
+    base_model = model_metadata.get("base_model") or model_id
+    grouping_model = model_metadata.get("grouping_model") or model_id
 
     # Get model-specific panels_per_lot (from maximum_lot_size_sht * 6) or use default
     panels_per_lot = model_metadata.get("panels_per_lot", defaults.panels_per_lot)
