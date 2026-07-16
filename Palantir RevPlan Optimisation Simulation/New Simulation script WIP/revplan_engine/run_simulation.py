@@ -15,17 +15,14 @@ module header); Foundry coupling is isolated in `_foundry_shim`. This file only:
   * drops the Foundry-only multi-simulation / incremental / run-tracker-skipping
     machinery (a button click = exactly one scenario).
 
-TWO KINDS OF PLACEHOLDER remain, clearly marked:
+ALL ANALYSES ARE PORTED (2026-07-16) — no 🧩 stubs remain. The only markers left:
   🔌 CONNECTION placeholder = YOU wire this to Celonis (pycelonis read/write).
-  🧩 STUB (port next)       = a heavy analysis returned EMPTY so the core runs
-                              end-to-end; port it from the named Palantir file
-                              when you need it.
 
 SCOPE (agreed): "Runnable core + hooks", business-logic changes OFF by default.
-  Core that actually computes: net demand -> priorities -> allocation + virtual
-  lots -> monthly-fulfillment scorecard (+ the engine's `unrouted` output).
-  Stubbed: capacity-shortage, material-depletion, ET-jig risk, demand-shortfall,
-  production-risk-reconciliation.
+  Full chain: net demand -> priorities -> allocation + virtual lots ->
+  capacity-shortage -> ET-jig risk -> material-depletion -> demand-shortfall ->
+  monthly-fulfillment scorecard -> production-risk-reconciliation
+  (+ the engine's `unrouted` output).
 
 DATA LIBRARY: polars throughout (same as Palantir). pycelonis usually hands you
 pandas — convert at the connection edges only:
@@ -49,6 +46,7 @@ from . import et_jig_risk as _ejr_mod
 from . import capacity_shortage as _cs_mod
 from . import demand_shortfall as _dsf_mod
 from . import material_depletion as _md_mod
+from . import production_risk_reconciliation as _prr_mod
 from .allocation_engine import (
     allocate_month_by_month,
     ALLOCATION_OUTPUT_SCHEMA,
@@ -557,8 +555,8 @@ def compute_monthly_fulfillment(*,
 
 
 # ==============================================================================
-# 4.  🧩 STUBS — heavy analyses returned EMPTY so the core runs end-to-end.
-#     Port each from the named Palantir file when you need it.
+# 4.  ANALYSES — all Palantir analyses now ported (verbatim via the shim);
+#     each wrapper below documents its inputs and any MLWB divergences.
 # ==============================================================================
 
 def compute_capacity_shortage(allocation, failed):
@@ -697,9 +695,59 @@ def compute_demand_shortfall(allocation, failed, new_lots, net_demand, model_pri
 
 
 def compute_production_risk_reconciliation(allocation, failed, fulfillment_wide, et_jig_risk):
-    """🧩 PORT NEXT from production_risk_reconciliation.py -> production_risk_reconciliation."""
-    print("   🧩 STUB: production_risk_reconciliation (returning empty)")
-    return pl.DataFrame()
+    """PORTED FROM production_risk_reconciliation.py (run verbatim via the shim, 2026-07-16).
+
+    The "why did we miss the plan" rollup — one row per risk event, reconciling with
+    fulfillment_wide's shortfall (shortfall = production_and_inventory +
+    impossible_to_simulate − planned_demand) across 5 categories: FAILED_ALLOCATION,
+    FAILED_NO_EQUIPMENT, ET_JIG_CAPACITY_ISSUE, EQUIPMENT_CAPACITY_DELAY,
+    LEAD_TIME_SHORTFALL. All four inputs are this run's own outputs — no new sources.
+    NOTE the source hard-excludes target_month/month_str == '202601' as its simulation
+    boundary; on the 202601 backtest/demo the first month is therefore absent HERE by
+    design (fulfillment still covers it).
+
+    ⚠️ MLWB DIVERGENCES (wrapper only — the ported module is untouched):
+      * final_production_units / total_revenue / total_margin exist on allocation only
+        when the financial-enrichment branch ran — null-filled here otherwise (the
+        source read them as nulls from Foundry in the same situation).
+      * fulfillment_wide / et_jig_risk frames missing their key columns (a truly empty
+        upstream) short-circuit to the module's own empty output schema.
+      * List columns (affected_lot_ids, bottleneck_equipment_ids, delay_dates) are
+        joined to comma-separated strings for the Data Pool push.
+    """
+    def _empty_result():
+        return pl.DataFrame(schema=_prr_mod.PRODUCTION_RISK_RECONCILIATION_SCHEMA)
+
+    if fulfillment_wide.height == 0 or "month_str" not in fulfillment_wide.columns:
+        print("   ⏭  production_risk_reconciliation skipped: fulfillment_wide is empty "
+              "(the shortfall reconciliation has no source of truth to reconcile against)")
+        return _empty_result()
+    if et_jig_risk.height > 0 and "target_month" not in et_jig_risk.columns:
+        et_jig_risk = pl.DataFrame()
+    if et_jig_risk.height == 0:
+        # module filters on these columns before any row access
+        et_jig_risk = pl.DataFrame(schema={
+            "simulation_id": pl.Utf8, "model_id": pl.Utf8, "target_month": pl.Utf8})
+
+    for col, dtype in (("final_production_units", pl.Int32),
+                       ("total_revenue", pl.Float64), ("total_margin", pl.Float64)):
+        if col not in allocation.columns:
+            allocation = allocation.with_columns(pl.lit(None, dtype=dtype).alias(col))
+
+    out = InMemoryOutput()
+    _prr_mod.compute(
+        InMemoryInput(allocation),
+        InMemoryInput(failed),
+        InMemoryInput(fulfillment_wide),
+        InMemoryInput(et_jig_risk),
+        out,
+    )
+    res = out.result if out.result is not None else _empty_result()
+    list_cols = [c for c, dt in res.schema.items() if isinstance(dt, pl.List)]
+    if list_cols:
+        res = res.with_columns([
+            pl.col(c).cast(pl.List(pl.Utf8)).list.join(",").alias(c) for c in list_cols])
+    return res
 
 
 # ==============================================================================
@@ -794,7 +842,7 @@ def run_simulation(params: SimulationParams,
         new_model_demand_risk=eng.unrouted,
     )
 
-    # --- Tier 6: production risk reconciliation (stubbed) ---------------------
+    # --- Tier 6: production risk reconciliation (ported 2026-07-16) -----------
     risk_reconciliation = compute_production_risk_reconciliation(
         eng.allocation, eng.failed, fulfillment_wide, et_jig_risk)
 
@@ -816,7 +864,6 @@ def run_simulation(params: SimulationParams,
         "material_depletion_events": material_depletion_events,
         "constrained_production_lots": constrained_production_lots,
         "material_data_quality_issues": material_data_quality,
-        # stubbed analyses (empty until ported):
         "production_risk_reconciliation": risk_reconciliation,
     }
 
