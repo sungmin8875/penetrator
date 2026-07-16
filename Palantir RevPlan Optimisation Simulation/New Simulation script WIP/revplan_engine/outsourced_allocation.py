@@ -107,7 +107,21 @@ def _plan_lt_days(
         total_hours = float(run_lt or 0.0) * float(sheets) + float(wait_lt or 0.0)
     if total_hours <= 0:
         return max(1, int(config.constraints.outsourced_step_days_default))
-    return max(1, ceil(total_hours / _HOURS_PER_DAY))
+    days = max(1, ceil(total_hours / _HOURS_PER_DAY))
+
+    # Outlier cap: routing PlanLt carries garbage rows (observed: step durations
+    # placing lots in 2082). One bad row must not march a lot past the horizon —
+    # cap the step and record it for the run audit (data fix belongs at the source).
+    max_days = int(config.constraints.outsourced_step_max_days)
+    if max_days > 0 and days > max_days:
+        capped = getattr(state, "outsourced_capped_ops", None)
+        if capped is None:
+            capped = state.outsourced_capped_ops = {}
+        pid = lot_step.get("process_id")
+        cnt, worst = capped.get(pid, (0, 0))
+        capped[pid] = (cnt + 1, max(worst, days))
+        return max_days
+    return days
 
 
 def try_allocate_outsourced_step(
@@ -183,3 +197,14 @@ def print_outsourced_summary(state: AllocationState) -> None:
         f"    {listed}{more}\n"
         "    → audit: an op that should be IN-HOUSE in this list = missing equipment mapping."
     )
+    capped = getattr(state, "outsourced_capped_ops", None)
+    if capped:
+        worst = sorted(capped.items(), key=lambda kv: -kv[1][1])
+        listed = ", ".join(f"{op}×{cnt} (worst {days}d)" for op, (cnt, days) in worst[:15])
+        more = f" (+{len(worst) - 15} more ops)" if len(worst) > 15 else ""
+        print(
+            f"  ⚠ PLAN-LT OUTLIERS CAPPED: {sum(c for c, _ in capped.values())} outsourced steps "
+            f"exceeded outsourced_step_max_days and were capped:\n"
+            f"    {listed}{more}\n"
+            "    → audit: these ops' routing PlanLt values are garbage — fix at the source (RTS)."
+        )

@@ -93,6 +93,13 @@ class AllocationConstraints:
     # Run/Wait LT — the meeting's "계획완료일 임의 부여" fallback.
     outsourced_step_days_default: int = 1
 
+    # Sanity cap (days) on a single outsourced step's planned duration. Routing
+    # PlanLt carries outliers (observed 2026-07-16: step durations placing lots in
+    # 2082 — decades per step), and one bad row must not march a lot past the
+    # horizon. Capped ops are logged in the run's outsourced audit. A vendor step
+    # genuinely longer than this is a data problem to fix at the source.
+    outsourced_step_max_days: int = 30
+
     # Conditional-Wait threshold in hours (meeting_summary §5): a step stalled beyond
     # this with no queued WIP should be treated as immediately loadable, so an excessive
     # Wait LT does not push the whole plan backward. RESERVED for the (deferred) time-based
@@ -434,6 +441,9 @@ def load_config_from_row(row: Dict[str, Any], source_description: str = "dataset
         ),
         outsourced_step_days_default=_safe_get(
             row, "outsourced_step_days_default", default_constraints.outsourced_step_days_default, int
+        ),
+        outsourced_step_max_days=_safe_get(
+            row, "outsourced_step_max_days", default_constraints.outsourced_step_max_days, int
         ),
         max_steps_per_lot_per_day=_safe_get(
             row, "max_steps_per_lot_per_day", default_constraints.max_steps_per_lot_per_day, int
