@@ -572,11 +572,26 @@ def compute_capacity_shortage(allocation, failed):
     NO_EQUIPMENT failures are excluded from shortages by the source itself (config
     issues, not capacity) — outsourced-assumed steps never fail, so post-2026-07-15
     the failed input is capacity-only anyway.
+
+    ⚠️ MLWB DIVERGENCE (wrapper only): the module's console summary formats
+    equipment_group / total_revenue / total_margin with f-string specs that crash
+    on None ("unsupported format string passed to NoneType"). In Foundry these were
+    never null (weighted economics always ran); here a run without per-unit
+    economics leaves them null — so they are filled ("" / 0.0) BEFORE the call,
+    which also matches how the outputs looked on runs where economics were present.
     """
+    def _print_safe(df):
+        fills = {"equipment_group": pl.lit(""), "total_revenue": pl.lit(0.0),
+                 "total_margin": pl.lit(0.0)}
+        exprs = [pl.col(c).fill_null(v) if c in df.columns else v.alias(c)
+                 for c, v in fills.items()
+                 if c in df.columns or c != "equipment_group"]
+        return df.with_columns(exprs) if exprs else df
+
     out_shortages, out_waiting = InMemoryOutput(), InMemoryOutput()
     _cs_mod.compute(
-        InMemoryInput(allocation),
-        InMemoryInput(failed),
+        InMemoryInput(_print_safe(allocation)),
+        InMemoryInput(_print_safe(failed)),
         out_shortages,
         out_waiting,
     )
