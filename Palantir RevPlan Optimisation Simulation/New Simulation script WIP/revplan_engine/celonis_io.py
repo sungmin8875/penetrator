@@ -138,12 +138,17 @@ MATERIAL_SUBINV_CODES = frozenset(
     if v.strip()
 )
 
-# Drop inactive equipment everywhere (2026-07-16 fix): machines with ActiveFlag='N'
-# or NotuseFlag='Y' on the equipment master (e.g. GPJDP-103D, an inactive M710N CO2
-# drill) previously still counted toward capacity AND stayed allocatable through the
-# positive assignment map. "0" restores the old include-everything behaviour for
-# A/B / parity runs against earlier results.
+# Drop unusable equipment everywhere (2026-07-16): flagged machines must contribute
+# no capacity and no candidacy. TWO flags, TWO switches:
+#   * NotuseFlag='Y'  — trusted decommission marker, filtered BY DEFAULT.
+#   * ActiveFlag='N'  — ⚠️ NOT what it looks like: ~2,000 of ~3,500 machines carry 'N'
+#     (measured 2026-07-16), so it cannot mean "retired" — filtering on it amputated
+#     57% of the fleet and sent a run into hours of futile 200-day failure scans.
+#     OPT-IN via REVPLAN_EQUIPMENT_ACTIVEFLAG=1, only after the customer confirms the
+#     column's semantics (open ask: what does PK1_EQUIPMENT.ACTIVE_FLAG really mean?).
+# REVPLAN_EQUIPMENT_ACTIVE_ONLY=0 disables BOTH (include-everything parity mode).
 EQUIPMENT_ACTIVE_ONLY = os.environ.get("REVPLAN_EQUIPMENT_ACTIVE_ONLY", "1") != "0"
+EQUIPMENT_USE_ACTIVEFLAG = os.environ.get("REVPLAN_EQUIPMENT_ACTIVEFLAG", "0") == "1"
 
 # BOM CHASU (차수 / revision round) handling for read_model_boms:
 #   "per_key"          (default) — per (model, op, seq, material) keep the row with the
@@ -1220,9 +1225,15 @@ _INACTIVE_EQUIPMENT: Optional[frozenset] = None
 
 
 def _inactive_equipment() -> frozenset:
-    """Equipment codes that must not be planned on: ActiveFlag='N' or NotuseFlag='Y'.
+    """Equipment codes that must not be planned on.
 
-    One master-data set, applied in BOTH places an inactive machine could leak in:
+    DEFAULT criterion: NotuseFlag='Y' only. ActiveFlag='N' joins the criterion only
+    under REVPLAN_EQUIPMENT_ACTIVEFLAG=1 — measured 2026-07-16, ~2,000 of ~3,500
+    machines carry ActiveFlag='N', so it cannot mean "retired"; filtering on it
+    amputated 57% of the fleet and blew a run up into hours of 200-day failure
+    scans. Semantics are a pending customer question.
+
+    One master-data set, applied in BOTH places an unusable machine could leak in:
       * read_equipment_capacity — else it contributes daily sheets to its group;
       * read_equipment_to_process — else it stays a CANDIDATE and, being absent
         from the capacity lookup, would run on the engine's DEFAULT capacity
@@ -1236,25 +1247,30 @@ def _inactive_equipment() -> frozenset:
     if _INACTIVE_EQUIPMENT is not None:
         return _INACTIVE_EQUIPMENT
     cols = {"equipment_id": "EQUIPMENT_CODE", "_active": "ActiveFlag", "_notuse": "NotuseFlag"}
+    if not EQUIPMENT_USE_ACTIVEFLAG:
+        cols.pop("_active")
     try:
         df = _pull("PK1_EQUIPMENT", cols)
     except Exception:  # noqa: BLE001 — ActiveFlag column may not exist on the object
         try:
             df = _pull("PK1_EQUIPMENT", {k: v for k, v in cols.items() if k != "_active"})
-            df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("_active"))
             print("   ⚠ equipment master has no readable ActiveFlag — filtering on NotuseFlag only")
         except Exception as ex:  # noqa: BLE001
             print(f"   ⚠ inactive-equipment probe failed ({ex}) — NO equipment filtered")
             _INACTIVE_EQUIPMENT = frozenset()
             return _INACTIVE_EQUIPMENT
     norm = lambda c, default: pl.col(c).cast(pl.Utf8).str.strip_chars().str.to_uppercase().fill_null(default)  # noqa: E731
-    bad = df.filter((norm("_active", "Y") == "N") | (norm("_notuse", "N") == "Y"))
+    crit = norm("_notuse", "N") == "Y"
+    if "_active" in df.columns:
+        crit = crit | (norm("_active", "Y") == "N")
+    bad = df.filter(crit)
     _INACTIVE_EQUIPMENT = frozenset(bad["equipment_id"].drop_nulls().to_list())
     if _INACTIVE_EQUIPMENT:
+        which = "ActiveFlag=N or NotuseFlag=Y" if "_active" in df.columns else "NotuseFlag=Y"
         sample = ", ".join(sorted(_INACTIVE_EQUIPMENT)[:8])
         more = f" (+{len(_INACTIVE_EQUIPMENT) - 8} more)" if len(_INACTIVE_EQUIPMENT) > 8 else ""
-        print(f"   ✓ inactive equipment excluded from planning: {len(_INACTIVE_EQUIPMENT)} "
-              f"(ActiveFlag=N or NotuseFlag=Y): {sample}{more}")
+        print(f"   ✓ unusable equipment excluded from planning: {len(_INACTIVE_EQUIPMENT)} "
+              f"({which}): {sample}{more}")
     return _INACTIVE_EQUIPMENT
 
 
