@@ -376,7 +376,8 @@ def data_model():
 # 2.  READ PRIMITIVE  — pull selected columns of one source table into polars.
 #     This is THE single line to adjust if your pycelonis read differs.
 # ==============================================================================
-def _pull(table: str, colmap: Dict[str, str], distinct: bool = False) -> pl.DataFrame:
+def _pull(table: str, colmap: Dict[str, str], distinct: bool = False,
+          filters: Optional[List[str]] = None) -> pl.DataFrame:
     """PQL-read `table`, aliasing each source column to the engine column name.
 
         colmap = {engine_col: SOURCE_COL}   ->  SELECT "TABLE"."SOURCE_COL" AS engine_col
@@ -384,13 +385,18 @@ def _pull(table: str, colmap: Dict[str, str], distinct: bool = False) -> pl.Data
     Returns a polars frame whose columns are already the engine's names.
     `table`/`src` are the engine's LOGICAL PPS names; they are translated to the
     actual data-model names via TABLE_MAP / COLUMN_MAP before the query is built.
+    `filters` are raw PQL FILTER statements (already in DATA-MODEL column names —
+    build them via _pql_col) applied SERVER-SIDE, so a huge source (e.g. a decade
+    of hourly snapshot batches) never has to travel to the notebook kernel.
     """
-    from pycelonis.pql import PQL, PQLColumn
+    from pycelonis.pql import PQL, PQLColumn, PQLFilter
     import pycelonis.pql as pql
     dm = data_model()
     actual_table = TABLE_MAP.get(table, table)
     colrename = COLUMN_MAP.get(table, {})
     q = PQL(distinct=distinct)
+    for f in (filters or []):
+        q += PQLFilter(query=f)
     for engine_col, src in colmap.items():
         actual_src = colrename.get(src, src)
         q += PQLColumn(name=engine_col, query=f'"{actual_table}"."{actual_src}"')
@@ -408,6 +414,45 @@ def _pull(table: str, colmap: Dict[str, str], distinct: bool = False) -> pl.Data
     except AttributeError:
         pdf = dm.export_data_frame(q)                                # SaolaPy absent -> legacy exporter
     return pl.from_pandas(pdf)
+
+
+def _pql_col(table: str, src: str) -> str:
+    """Fully-qualified data-model column reference for raw PQL (FILTER strings etc.)."""
+    actual_table = TABLE_MAP.get(table, table)
+    actual_src = COLUMN_MAP.get(table, {}).get(src, src)
+    return f'"{actual_table}"."{actual_src}"'
+
+
+def _latest_batch_filter(table: str, what: str) -> Optional[List[str]]:
+    """Server-side FILTER limiting a BatchDate-stamped snapshot table to its newest day.
+
+    o_custom_OnHand / o_custom_PoArrivePlan carry EVERY historical batch (multiple
+    per day since 2015/2018) — pulling them whole OOMs the notebook kernel. This
+    probes MAX(BatchDate) with a one-row aggregate query, then returns a
+    `FILTER col >= {d'<that day>'}` so only the newest day's batches travel;
+    _latest_batch() still refines to the exact batch+hour in polars.
+    Returns None when the probe fails (caller decides whether to risk a full pull).
+    """
+    from pycelonis.pql import PQL, PQLColumn
+    import pycelonis.pql as pql
+    col = _pql_col(table, "BATCH_DATE")
+    try:
+        q = PQL()
+        q += PQLColumn(name="max_bd", query=f"MAX({col})")
+        try:
+            pdf = pql.DataFrame.from_pql(q, data_model=data_model()).to_pandas()
+        except AttributeError:
+            pdf = data_model().export_data_frame(q)
+        max_bd = pdf["max_bd"].iloc[0] if len(pdf) else None
+        if max_bd is None:
+            print(f"   ⚠ {what}: MAX(BatchDate) probe returned nothing")
+            return None
+        day = str(max_bd)[:10]  # 'YYYY-MM-DD' from Timestamp/str alike
+        print(f"   ✓ {what}: newest snapshot day {day} — filtering server-side")
+        return [f"FILTER {col} >= {{d'{day}'}}"]
+    except Exception as ex:  # noqa: BLE001
+        print(f"   ⚠ {what}: MAX(BatchDate) probe failed ({ex})")
+        return None
 
 
 def _empty(name: str, columns, why: str) -> pl.DataFrame:
@@ -1527,6 +1572,11 @@ def read_material_inventories(params) -> pl.DataFrame:
     filtered via MATERIAL_SUBINV_CODES. Snapshot table → latest BatchDate/BatchHour
     only, then summed per material (the analysis treats it as one global opening
     inventory, exactly like Palantir's material_inventories input)."""
+    flt = _latest_batch_filter("PK1_ONHAND_TRN", "material_inventories (OnHand)")
+    if flt is None:
+        # A full-history pull (decade of multi-daily batches) OOMs the kernel — refuse.
+        return _empty("material_inventories", _MATINV_SCHEMA,
+                      "MAX(BatchDate) probe failed — refusing the unbounded OnHand pull")
     try:
         df = _pull("PK1_ONHAND_TRN", {
             "material_id":     "ITEM_NO",
@@ -1534,7 +1584,7 @@ def read_material_inventories(params) -> pl.DataFrame:
             "_subinv":         "SUBINVENTORY_CODE",
             "batch_date":      "BATCH_DATE",
             "batch_hour":      "BATCH_HOUR",
-        })
+        }, filters=flt)
     except Exception as ex:  # noqa: BLE001
         return _empty("material_inventories", _MATINV_SCHEMA, f"PK1_ONHAND_TRN pull failed: {ex}")
     df = _latest_batch(df, "material_inventories (OnHand)")
@@ -1559,6 +1609,10 @@ def read_planned_material_arrivals(params) -> pl.DataFrame:
     adds arrivals ON TOP of initial inventory — keeping them would double-count.
     plan_date is cast to Date so the module's `plan_date <= allocated_date`
     comparison matches the engine's pl.Date allocated_date."""
+    flt = _latest_batch_filter("PK1_PO_ARRIVE_PLAN", "planned_material_arrivals (PoArrivePlan)")
+    if flt is None:
+        return _empty("planned_material_arrivals", _ARRIVALS_SCHEMA,
+                      "MAX(BatchDate) probe failed — refusing the unbounded PoArrivePlan pull")
     try:
         df = _pull("PK1_PO_ARRIVE_PLAN", {
             "material_id": "PART_NO",
@@ -1566,7 +1620,7 @@ def read_planned_material_arrivals(params) -> pl.DataFrame:
             "quantity":    "QTY",
             "batch_date":  "BATCH_DATE",
             "batch_hour":  "BATCH_HOUR",
-        })
+        }, filters=flt)
     except Exception as ex:  # noqa: BLE001
         return _empty("planned_material_arrivals", _ARRIVALS_SCHEMA,
                       f"PK1_PO_ARRIVE_PLAN pull failed: {ex}")
