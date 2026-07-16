@@ -47,6 +47,7 @@ from . import net_production_demand as _npd_mod
 from . import monthly_fulfillment as _mf_mod
 from . import et_jig_risk as _ejr_mod
 from . import capacity_shortage as _cs_mod
+from . import demand_shortfall as _dsf_mod
 from .allocation_engine import (
     allocate_month_by_month,
     ALLOCATION_OUTPUT_SCHEMA,
@@ -610,11 +611,30 @@ def compute_et_jig_risk(new_lots, et_jig_master, net_demand, model_priorities, a
 
 def compute_demand_shortfall(allocation, failed, new_lots, net_demand, model_priorities,
                              equipment_shortages, lot_waiting_periods):
-    """🧩 PORT NEXT from demand_shortfall_analysis.py -> demand_shortfall.
+    """PORTED FROM demand_shortfall_analysis.py (run verbatim via the shim, 2026-07-16).
 
-    NOTE: monthly_fulfillment consumes this. Empty is fine for the core run, but it
-    hard-references these columns, so the empty frame MUST carry their schema."""
-    print("   🧩 STUB: demand_shortfall_analysis (returning empty)")
+    One row per (simulation, model, target_month) with unmet demand, attributed to
+    a capacity cause: INSUFFICIENT_CAPACITY / EQUIPMENT_BLOCKED / NO_VALID_EQUIPMENT /
+    LEAD_TIME_AND_ET_JIG_CAPACITY. Its equipment_shortages / lot_waiting_periods
+    inputs come from the capacity_shortage port (same run, one tier up), and
+    monthly_fulfillment consumes the output for the impossible_to_simulate split —
+    which the old empty stub silently pinned to 0.
+    Empty result falls back to the stub's minimal schema so fulfillment's hard
+    column references keep working either way.
+    """
+    out = InMemoryOutput()
+    _dsf_mod.compute(
+        InMemoryInput(allocation),
+        InMemoryInput(failed),
+        InMemoryInput(new_lots),
+        InMemoryInput(net_demand),
+        InMemoryInput(model_priorities),
+        InMemoryInput(equipment_shortages),
+        InMemoryInput(lot_waiting_periods),
+        out,
+    )
+    if out.result is not None and out.result.height >= 0 and out.result.width > 0:
+        return out.result
     return pl.DataFrame(schema={
         "simulation_id": pl.Utf8, "revenue_plan_id": pl.Utf8, "model_id": pl.Utf8,
         "primary_reason": pl.Utf8, "target_month": pl.Utf8,
