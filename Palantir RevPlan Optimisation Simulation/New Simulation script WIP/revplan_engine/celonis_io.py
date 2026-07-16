@@ -138,6 +138,13 @@ MATERIAL_SUBINV_CODES = frozenset(
     if v.strip()
 )
 
+# Drop inactive equipment everywhere (2026-07-16 fix): machines with ActiveFlag='N'
+# or NotuseFlag='Y' on the equipment master (e.g. GPJDP-103D, an inactive M710N CO2
+# drill) previously still counted toward capacity AND stayed allocatable through the
+# positive assignment map. "0" restores the old include-everything behaviour for
+# A/B / parity runs against earlier results.
+EQUIPMENT_ACTIVE_ONLY = os.environ.get("REVPLAN_EQUIPMENT_ACTIVE_ONLY", "1") != "0"
+
 # BOM CHASU (차수 / revision round) handling for read_model_boms:
 #   "per_key"          (default) — per (model, op, seq, material) keep the row with the
 #                       highest CHASU. Never double-counts a material, never drops one
@@ -1209,20 +1216,63 @@ _INFINITE_CAPA_SHT = 10_000_000
 
 
 # ---- ✅ equipment_capacity  <-  o_custom_Equipment (+ o_custom_EquipmentGroup) -
+_INACTIVE_EQUIPMENT: Optional[frozenset] = None
+
+
+def _inactive_equipment() -> frozenset:
+    """Equipment codes that must not be planned on: ActiveFlag='N' or NotuseFlag='Y'.
+
+    One master-data set, applied in BOTH places an inactive machine could leak in:
+      * read_equipment_capacity — else it contributes daily sheets to its group;
+      * read_equipment_to_process — else it stays a CANDIDATE and, being absent
+        from the capacity lookup, would run on the engine's DEFAULT capacity
+        (worse than counting its real capacity).
+    Cached per process; empty set (+ warning) when the flags aren't readable, and
+    always empty when REVPLAN_EQUIPMENT_ACTIVE_ONLY=0 (parity kill switch).
+    """
+    global _INACTIVE_EQUIPMENT
+    if not EQUIPMENT_ACTIVE_ONLY:
+        return frozenset()
+    if _INACTIVE_EQUIPMENT is not None:
+        return _INACTIVE_EQUIPMENT
+    cols = {"equipment_id": "EQUIPMENT_CODE", "_active": "ActiveFlag", "_notuse": "NotuseFlag"}
+    try:
+        df = _pull("PK1_EQUIPMENT", cols)
+    except Exception:  # noqa: BLE001 — ActiveFlag column may not exist on the object
+        try:
+            df = _pull("PK1_EQUIPMENT", {k: v for k, v in cols.items() if k != "_active"})
+            df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("_active"))
+            print("   ⚠ equipment master has no readable ActiveFlag — filtering on NotuseFlag only")
+        except Exception as ex:  # noqa: BLE001
+            print(f"   ⚠ inactive-equipment probe failed ({ex}) — NO equipment filtered")
+            _INACTIVE_EQUIPMENT = frozenset()
+            return _INACTIVE_EQUIPMENT
+    norm = lambda c, default: pl.col(c).cast(pl.Utf8).str.strip_chars().str.to_uppercase().fill_null(default)  # noqa: E731
+    bad = df.filter((norm("_active", "Y") == "N") | (norm("_notuse", "N") == "Y"))
+    _INACTIVE_EQUIPMENT = frozenset(bad["equipment_id"].drop_nulls().to_list())
+    if _INACTIVE_EQUIPMENT:
+        sample = ", ".join(sorted(_INACTIVE_EQUIPMENT)[:8])
+        more = f" (+{len(_INACTIVE_EQUIPMENT) - 8} more)" if len(_INACTIVE_EQUIPMENT) > 8 else ""
+        print(f"   ✓ inactive equipment excluded from planning: {len(_INACTIVE_EQUIPMENT)} "
+              f"(ActiveFlag=N or NotuseFlag=Y): {sample}{more}")
+    return _INACTIVE_EQUIPMENT
+
+
 def read_equipment_capacity(params) -> pl.DataFrame:
     df = _pull("PK1_EQUIPMENT", {
         "equipment_id":          "EQUIPMENT_CODE",   # -> EquipmentCode
         "_mapping_name":         "MAPPING_NAME",      # -> MappingName (mostly null; real group lives in EquipmentGroup)
         "daily_capacity_in_sht": "DAILY_CAPA",        # -> DailyCapa (null for outsourced -> engine defaults)
         "site_id":               "SITE",
-        "_notuse_flag":          "NotuseFlag",        # decommissioned marker: 'Y' = retired
     })
-    # Drop decommissioned equipment (NotuseFlag='Y') so allocation can't assign to it;
-    # null / 'N' are kept as active. Safe on an empty frame (filter/drop no-op).
-    _before = df.height
-    df = df.filter(pl.col("_notuse_flag").fill_null("N") != "Y").drop("_notuse_flag")
-    if _before != df.height:
-        print(f"   ✓ equipment_capacity: dropped {_before - df.height} decommissioned (NotuseFlag=Y); {df.height} active")
+    # Drop inactive machines (ActiveFlag='N' or NotuseFlag='Y') so they contribute no
+    # capacity; null flags are kept as active. Safe on an empty frame (filter no-op).
+    inactive = _inactive_equipment()
+    if inactive:
+        _before = df.height
+        df = df.filter(~pl.col("equipment_id").is_in(list(inactive)))
+        if _before != df.height:
+            print(f"   ✓ equipment_capacity: dropped {_before - df.height} inactive; {df.height} active")
     if df.height:
         df = df.with_columns(pl.col("daily_capacity_in_sht").cast(pl.Float64, strict=False))
 
@@ -1344,6 +1394,14 @@ def read_equipment_to_process(params) -> pl.DataFrame:
             print(f"   ✓ equipment_to_process: latest SimulVersion={latest}")
         df = df.drop("_simul_version").unique()
         df = df.filter(pl.col("process_id").is_not_null() & pl.col("equipment_id").is_not_null())
+        # Inactive machines must not stay CANDIDATES: absent from the capacity lookup
+        # they'd run on the engine's default capacity instead of disappearing.
+        inactive = _inactive_equipment()
+        if inactive:
+            _before = df.height
+            df = df.filter(~pl.col("equipment_id").is_in(list(inactive)))
+            if _before != df.height:
+                print(f"   ✓ equipment_to_process: dropped {_before - df.height} links to inactive equipment")
         print(f"   ✓ equipment_to_process: {df.height} distinct process↔equipment links "
               f"({df['process_id'].n_unique()} processes, {df['equipment_id'].n_unique()} equipment)")
         return _add_missing(df, ["process_id", "equipment_id", "equipment_group_id"])
