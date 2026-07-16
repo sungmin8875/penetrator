@@ -46,6 +46,7 @@ import polars as pl
 from . import net_production_demand as _npd_mod
 from . import monthly_fulfillment as _mf_mod
 from . import et_jig_risk as _ejr_mod
+from . import capacity_shortage as _cs_mod
 from .allocation_engine import (
     allocate_month_by_month,
     ALLOCATION_OUTPUT_SCHEMA,
@@ -559,9 +560,28 @@ def compute_monthly_fulfillment(*,
 # ==============================================================================
 
 def compute_capacity_shortage(allocation, failed):
-    """🧩 PORT NEXT from capacity_shortage_analysis.py -> (equipment_shortages, lot_waiting_periods)."""
-    print("   🧩 STUB: capacity_shortage_analysis (returning empty)")
-    return pl.DataFrame(), pl.DataFrame()
+    """PORTED FROM capacity_shortage_analysis.py (run verbatim via the shim, 2026-07-16).
+
+    Inputs are the engine's own allocation + failed_allocations outputs (the same
+    Foundry datasets the source read). Produces:
+      * equipment_shortages  — contiguous per-equipment-group shortage periods with
+        lot counts, delay-day totals and revenue/margin at risk (the "which op is
+        the bottleneck, when, how bad" table — e.g. the M710N story).
+      * lot_waiting_periods  — one row per lot × equipment group wait, delayed and
+        failed lots both, with parsed blocked/full equipment lists.
+    NO_EQUIPMENT failures are excluded from shortages by the source itself (config
+    issues, not capacity) — outsourced-assumed steps never fail, so post-2026-07-15
+    the failed input is capacity-only anyway.
+    """
+    out_shortages, out_waiting = InMemoryOutput(), InMemoryOutput()
+    _cs_mod.compute(
+        InMemoryInput(allocation),
+        InMemoryInput(failed),
+        out_shortages,
+        out_waiting,
+    )
+    return (out_shortages.result if out_shortages.result is not None else pl.DataFrame(),
+            out_waiting.result if out_waiting.result is not None else pl.DataFrame())
 
 
 def compute_material_depletion(allocation, material_inventories, model_boms, planned_material_arrivals):
