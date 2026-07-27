@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import polars as pl
 
@@ -158,6 +158,26 @@ EQUIPMENT_USE_ACTIVEFLAG = os.environ.get("REVPLAN_EQUIPMENT_ACTIVEFLAG", "0") =
 #                       every round re-lists the FULL bom; drops materials otherwise.
 BOM_CHASU_MODE = os.environ.get("REVPLAN_BOM_CHASU_MODE", "per_key").strip().lower()
 
+# ACTIVE-MATERIAL WHITELIST (2026-07-27) — the fix for the 자재 커버리지 problem.
+# o_custom_BOM is the ENGINEERING bom: every material ever specified for a model
+# across all CHASU rounds, including obsolete revisions and alternates. Measured
+# 2026-07-16: only ~11% of its materials have a RAW-MTL on-hand row, so
+# material_depletion treated the rest as zero stock and flagged thousands of
+# phantom shortages (31,688 constrained lots, most of them artifacts).
+# WipDaily.BomMaterialList is the OPERATIONAL list — the materials the MES actually
+# expects to be issued for a lot — and its materials match on-hand at ~74%. Using it
+# as a WHITELIST over the BOM keeps everything the simulation needs from the BOM
+# (ReqQty for volume, OperationCode/WorkSeq for timing) and drops the dead materials.
+#   "0" restores the old behaviour (full engineering BOM) for A/B runs.
+BOM_ACTIVE_ONLY = os.environ.get("REVPLAN_BOM_ACTIVE_ONLY", "1") != "0"
+# A model with NO WipDaily list — a new model whose demand is served entirely by
+# virtual lots — has no per-model whitelist. How its BOM rows are treated:
+#   "global" (default) — filter against the union of ALL models' active materials
+#                        (kills obsolete materials without over-filtering the model)
+#   "keep"             — leave that model's BOM unfiltered (old behaviour, per model)
+#   "drop"             — drop the model's BOM rows entirely (aggressive; not advised)
+BOM_WHITELIST_FALLBACK = os.environ.get("REVPLAN_BOM_WHITELIST_FALLBACK", "global").strip().lower()
+
 
 # ------------------------------------------------------------------------------
 # Source-name mapping — engine's logical PPS/RTS names -> actual names in THIS
@@ -214,6 +234,13 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "EQPTID":          "EQPTID",
         "REAL_WIPSHTQTY":  "RealWipshtqty",
         "REAL_WIPUNITQTY": "RealWipunitqty",
+        # ✅ 2026-07-27 — the MES's OPERATIONAL material list for the lot, e.g.
+        # '5PPP00118A(투입예정/충분), SMFICF00001-Z(기투입/해당없음)'. Verified: identical at
+        # every operation and every snapshot of a lot (route-level, not per-step), PK1 only
+        # (FK1 is 100% null), max length 876 chars = not truncated. Feeds _active_materials().
+        "BOM_MATERIAL_LIST":     "BomMaterialList",
+        "BOM_MATERIAL_SHORTAGE": "BomMaterialShortageCnt",
+        "BOM_MATERIAL_TOTAL":    "BomMaterialTotalCnt",
     },
     "RTSP_MODEL_ROUTING_M": {
         "PRODID":          "ModelNo",         # ✅ routing carries the PPS MODEL_NO directly -> NO crosswalk
@@ -1588,6 +1615,107 @@ def _latest_batch(df: pl.DataFrame, what: str) -> pl.DataFrame:
     return df
 
 
+_ACTIVE_MATERIALS: Optional[Tuple[Dict[str, frozenset], frozenset]] = None
+
+
+def _parse_bom_material_list(raw: str) -> List[str]:
+    """'5PPP00118A(투입예정/충분), SMFICF00001-Z(기투입/해당없음)' → ['5PPP00118A', 'SMFICF00001-Z'].
+
+    Entries REPEAT when a material is consumed at several points of the route (a
+    prepreg across 3 lamination layers appears 3×) — the caller dedupes. Material
+    codes carry hyphens but never parentheses (verified 2026-07-27 across a full
+    lot history), so splitting on '(' is unambiguous. Status tokens seen so far:
+    투입예정/충분, 기투입/해당없음.
+    """
+    out: List[str] = []
+    for token in (raw or "").split(","):
+        code = token.split("(", 1)[0].strip()
+        if code:
+            out.append(code)
+    return out
+
+
+def _active_materials() -> Tuple[Dict[str, frozenset], frozenset]:
+    """(model_id -> active materials, union of all active materials) from WipDaily.
+
+    Read server-side as DISTINCT (PRODID, BomMaterialList): the same lot repeats an
+    identical list across its ~67 daily snapshots and every operation, so the distinct
+    collapses ~2.3M rows to a few thousand before anything leaves Celonis.
+    Cached per process. Empty result (+ warning) disables the filter rather than
+    silently emptying the BOM — a whitelist we could not read must never look like a
+    whitelist that matched nothing.
+    """
+    global _ACTIVE_MATERIALS
+    if _ACTIVE_MATERIALS is not None:
+        return _ACTIVE_MATERIALS
+    try:
+        df = _pull("RTSP_WIP_N", {"model_id": "PRODID", "_bom_list": "BOM_MATERIAL_LIST"},
+                   distinct=True)
+    except Exception as ex:  # noqa: BLE001 — column absent on this data model
+        print(f"   ⚠ active-material whitelist: WipDaily.BomMaterialList not readable ({ex}) "
+              "— BOM stays UNFILTERED (engineering BOM, phantom-shortage risk)")
+        _ACTIVE_MATERIALS = ({}, frozenset())
+        return _ACTIVE_MATERIALS
+
+    per_model: Dict[str, set] = {}
+    global_set: set = set()
+    for row in df.filter(
+        pl.col("model_id").is_not_null() & pl.col("_bom_list").is_not_null()
+    ).iter_rows(named=True):
+        mats = _parse_bom_material_list(row["_bom_list"])
+        if not mats:
+            continue
+        per_model.setdefault(row["model_id"], set()).update(mats)
+        global_set.update(mats)
+
+    if not global_set:
+        print("   ⚠ active-material whitelist: no BomMaterialList values found "
+              "— BOM stays UNFILTERED")
+    else:
+        print(f"   ✓ active-material whitelist: {len(global_set):,} distinct materials "
+              f"across {len(per_model):,} models (from WipDaily.BomMaterialList)")
+    _ACTIVE_MATERIALS = ({m: frozenset(s) for m, s in per_model.items()}, frozenset(global_set))
+    return _ACTIVE_MATERIALS
+
+
+def _apply_active_material_whitelist(df: pl.DataFrame) -> pl.DataFrame:
+    """Drop BOM rows whose material the MES no longer issues (see BOM_ACTIVE_ONLY).
+
+    Models WITH a WipDaily list are filtered against their own list; models without
+    one (new models served only by virtual lots) follow BOM_WHITELIST_FALLBACK.
+    """
+    if not BOM_ACTIVE_ONLY or df.height == 0:
+        return df
+    per_model, global_set = _active_materials()
+    if not global_set:
+        return df  # unreadable whitelist -> no filtering (warned in _active_materials)
+
+    known_models = list(per_model.keys())
+    allow = pl.DataFrame(
+        {"model_id": [m for m, mats in per_model.items() for _ in mats],
+         "material_id": [x for mats in per_model.values() for x in mats]},
+        schema={"model_id": pl.Utf8, "material_id": pl.Utf8},
+    )
+    is_known = pl.col("model_id").is_in(known_models)
+    known_rows, unknown_rows = df.filter(is_known), df.filter(~is_known)
+
+    kept_known = known_rows.join(allow, on=["model_id", "material_id"], how="semi")
+    if BOM_WHITELIST_FALLBACK == "keep":
+        kept_unknown = unknown_rows
+    elif BOM_WHITELIST_FALLBACK == "drop":
+        kept_unknown = unknown_rows.clear()
+    else:  # "global"
+        kept_unknown = unknown_rows.filter(pl.col("material_id").is_in(list(global_set)))
+
+    out = pl.concat([kept_known, kept_unknown], how="vertical")
+    print(f"   ✓ BOM active-material filter: {out.height:,} of {df.height:,} rows kept "
+          f"({kept_known.height:,} from {known_rows['model_id'].n_unique() if known_rows.height else 0} "
+          f"models with a WipDaily list; {kept_unknown.height:,} from "
+          f"{unknown_rows['model_id'].n_unique() if unknown_rows.height else 0} models without one, "
+          f"fallback={BOM_WHITELIST_FALLBACK})")
+    return out
+
+
 def read_model_boms(params) -> pl.DataFrame:
     """Model×operation×material requirements from PPS PK1_BOM (o_custom_BOM).
 
@@ -1621,6 +1749,15 @@ def read_model_boms(params) -> pl.DataFrame:
     else:  # per_key (default)
         df = df.sort("chasu", descending=True).unique(
             subset=["model_id", "process_id", "work_sequence", "material_id"], keep="first")
+
+    # Keep only materials the MES actually issues (WipDaily.BomMaterialList) — the
+    # engineering BOM's obsolete/alternate materials have no on-hand row and would
+    # otherwise be read as zero stock and flagged short. See _active_materials().
+    df = _apply_active_material_whitelist(df)
+    if df.height == 0:
+        return _empty("model_boms", _BOM_SCHEMA,
+                      "active-material whitelist removed every BOM row — check "
+                      "REVPLAN_BOM_ACTIVE_ONLY / BOM_WHITELIST_FALLBACK")
 
     # UOM enrichment from the material master (guarded — nulls are fine downstream).
     try:
