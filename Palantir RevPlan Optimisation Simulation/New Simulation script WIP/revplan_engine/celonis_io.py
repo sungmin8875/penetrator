@@ -462,19 +462,20 @@ def _pql_col(table: str, src: str) -> str:
     return f'"{actual_table}"."{actual_src}"'
 
 
-def _latest_batch_filter(table: str, what: str) -> Optional[List[str]]:
-    """Server-side FILTER limiting a BatchDate-stamped snapshot table to its newest day.
+def _latest_batch_filter(table: str, what: str, date_col: str = "BATCH_DATE") -> Optional[List[str]]:
+    """Server-side FILTER limiting a date-stamped snapshot table to its newest day.
 
     o_custom_OnHand / o_custom_PoArrivePlan carry EVERY historical batch (multiple
-    per day since 2015/2018) — pulling them whole OOMs the notebook kernel. This
-    probes MAX(BatchDate) with a one-row aggregate query, then returns a
-    `FILTER col >= {d'<that day>'}` so only the newest day's batches travel;
-    _latest_batch() still refines to the exact batch+hour in polars.
+    per day since 2015/2018) and o_custom_WipDaily carries ~67 daily snapshots —
+    pulling any of them whole OOMs the notebook kernel. This probes MAX(<date_col>)
+    with a one-row aggregate query, then returns a `FILTER col >= {d'<that day>'}`
+    so only the newest day travels; _latest_batch() still refines to the exact
+    batch+hour in polars where that applies.
     Returns None when the probe fails (caller decides whether to risk a full pull).
     """
     from pycelonis.pql import PQL, PQLColumn
     import pycelonis.pql as pql
-    col = _pql_col(table, "BATCH_DATE")
+    col = _pql_col(table, date_col)
     try:
         q = PQL()
         q += PQLColumn(name="max_bd", query=f"MAX({col})")
@@ -1638,9 +1639,12 @@ def _parse_bom_material_list(raw: str) -> List[str]:
 def _active_materials() -> Tuple[Dict[str, frozenset], frozenset]:
     """(model_id -> active materials, union of all active materials) from WipDaily.
 
-    Read server-side as DISTINCT (PRODID, BomMaterialList): the same lot repeats an
-    identical list across its ~67 daily snapshots and every operation, so the distinct
-    collapses ~2.3M rows to a few thousand before anything leaves Celonis.
+    ⚠️ BOUNDED READ (2026-07-27, after an OOM): the list is per-LOT, so a plain
+    DISTINCT barely dedupes — across ~67 daily snapshots that is ~2.3M rows of
+    ~440-char strings (~1 GB) and it killed the kernel. Since the list is IDENTICAL
+    at every snapshot and every operation of a lot (verified), the LATEST SNAPSHOT
+    alone carries the whole picture: the read is filtered server-side to that day
+    (and to the run's site scope), leaving ~48k rows before DISTINCT.
     Cached per process. Empty result (+ warning) disables the filter rather than
     silently emptying the BOM — a whitelist we could not read must never look like a
     whitelist that matched nothing.
@@ -1648,20 +1652,35 @@ def _active_materials() -> Tuple[Dict[str, frozenset], frozenset]:
     global _ACTIVE_MATERIALS
     if _ACTIVE_MATERIALS is not None:
         return _ACTIVE_MATERIALS
+
+    flt = _latest_batch_filter("RTSP_WIP_N", "active-material whitelist (WipDaily)",
+                               date_col="SnapshotDate")
+    if flt is None:
+        # Refuse the unbounded pull — that is what OOM'd the kernel. No filter is
+        # strictly better than no run.
+        print("   ⚠ active-material whitelist: MAX(SnapshotDate) probe failed — refusing the "
+              "unbounded WipDaily pull; BOM stays UNFILTERED")
+        _ACTIVE_MATERIALS = ({}, frozenset())
+        return _ACTIVE_MATERIALS
+    if WIP_SITES:
+        sites = ", ".join(f"'{s}'" for s in sorted(WIP_SITES))
+        flt = flt + [f"FILTER {_pql_col('RTSP_WIP_N', 'PlanningSiteCode')} IN ({sites})"]
+
     try:
         df = _pull("RTSP_WIP_N", {"model_id": "PRODID", "_bom_list": "BOM_MATERIAL_LIST"},
-                   distinct=True)
+                   distinct=True, filters=flt)
     except Exception as ex:  # noqa: BLE001 — column absent on this data model
         print(f"   ⚠ active-material whitelist: WipDaily.BomMaterialList not readable ({ex}) "
               "— BOM stays UNFILTERED (engineering BOM, phantom-shortage risk)")
         _ACTIVE_MATERIALS = ({}, frozenset())
         return _ACTIVE_MATERIALS
 
+    df = df.filter(pl.col("model_id").is_not_null() & pl.col("_bom_list").is_not_null())
+    print(f"   · active-material whitelist: {df.height:,} distinct (model, list) rows pulled")
+
     per_model: Dict[str, set] = {}
     global_set: set = set()
-    for row in df.filter(
-        pl.col("model_id").is_not_null() & pl.col("_bom_list").is_not_null()
-    ).iter_rows(named=True):
+    for row in df.iter_rows(named=True):
         mats = _parse_bom_material_list(row["_bom_list"])
         if not mats:
             continue
