@@ -841,6 +841,23 @@ def read_wip_lots(params) -> pl.DataFrame:
     }
     df = None
     if WIP_MODE != "legacy":
+        # ⚠️ BOUNDED READ (2026-07-29): WipDaily accumulates one full snapshot per day
+        # (~50k lots × ~80 days ≈ 4M rows and growing). This read used to pull ALL of
+        # it and keep one day in polars — the pull grew ~50k rows/day until it OOM'd
+        # the kernel (~8-min silent deaths since 07-27; last success 07-16 at ~67
+        # days). The engine only ever uses the LATEST snapshot, so filter to it (and
+        # the site scope) SERVER-SIDE; the polars latest-snapshot/dedupe logic below
+        # still runs and yields an identical frame. Probe failure falls back to the
+        # unbounded pull (wip_lots is an essential input) with a loud warning.
+        wip_flt = _latest_batch_filter("RTSP_WIP_N", "wip_lots (WipDaily)",
+                                       date_col="SnapshotDate")
+        if wip_flt is None:
+            print("   ⚠ wip_lots: MAX(SnapshotDate) probe failed — UNBOUNDED WipDaily pull "
+                  "(OOM risk grows daily; investigate before it recurs)")
+            wip_flt = []
+        elif WIP_SITES:
+            sites = ", ".join(f"'{s}'" for s in sorted(WIP_SITES))
+            wip_flt = wip_flt + [f"FILTER {_pql_col('RTSP_WIP_N', 'PlanningSiteCode')} IN ({sites})"]
         # receipt_target_day: the lot's real due date (WipDaily.ReceiptTargetDay,
         # ~58% filled — G4 2026-07-16). Urgent lots use it as their target month
         # instead of the synthetic start-month stamp; null falls back downstream.
@@ -848,12 +865,14 @@ def read_wip_lots(params) -> pl.DataFrame:
             df = _pull("RTSP_WIP_N", {**cols,
                                       "receipt_target_day": "ReceiptTargetDay",
                                       "_snapshot_date":     "SnapshotDate",
-                                      "_site":              "PlanningSiteCode"})
+                                      "_site":              "PlanningSiteCode"},
+                       filters=wip_flt)
         except Exception:  # noqa: BLE001 — retry without the due-date column
             try:
                 df = _pull("RTSP_WIP_N", {**cols,
                                           "_snapshot_date": "SnapshotDate",
-                                          "_site":          "PlanningSiteCode"})
+                                          "_site":          "PlanningSiteCode"},
+                           filters=wip_flt)
             except Exception as ex:  # noqa: BLE001
                 print(f"   ⚠ wip_lots: SnapshotDate/PlanningSiteCode not readable ({type(ex).__name__}); "
                       "falling back to the legacy raw read (NO snapshot/site filter)")
