@@ -168,8 +168,11 @@ BOM_CHASU_MODE = os.environ.get("REVPLAN_BOM_CHASU_MODE", "per_key").strip().low
 # expects to be issued for a lot — and its materials match on-hand at ~74%. Using it
 # as a WHITELIST over the BOM keeps everything the simulation needs from the BOM
 # (ReqQty for volume, OperationCode/WorkSeq for timing) and drops the dead materials.
-#   "0" restores the old behaviour (full engineering BOM) for A/B runs.
-BOM_ACTIVE_ONLY = os.environ.get("REVPLAN_BOM_ACTIVE_ONLY", "1") != "0"
+#   ⚠️ DEFAULT OFF (2026-07-29): suspended while isolating this week's ~8-minute
+#   read_inputs kernel deaths — the whitelist adds a WipDaily query to the same
+#   phase. Re-enable with REVPLAN_BOM_ACTIVE_ONLY=1 once runs are stable again;
+#   the parse/filter logic is tested and unchanged.
+BOM_ACTIVE_ONLY = os.environ.get("REVPLAN_BOM_ACTIVE_ONLY", "0") == "1"
 # A model with NO WipDaily list — a new model whose demand is served entirely by
 # virtual lots — has no per-model whitelist. How its BOM rows are treated:
 #   "global" (default) — filter against the union of ALL models' active materials
