@@ -570,7 +570,7 @@ def read_revenue_plan(params) -> pl.DataFrame:
         "revenue_plan_id": "REVISION_NO",
         "plan_month":      "YYYYMM",
         "quantity_ea":     "PLAN_QTY",
-        "amount_krw":      "PLAN_AMT",     # ⚠️ PK1_MPLAN has NO currency col — assumed KRW
+        "amount_krw":      "PLAN_AMT",     # ✅ customer confirmed 2026-07-30: value used AS IS (plain KRW — no 백만원 scaling; PK1_MPLAN has no currency col)
     })
     if df.height:
         df = df.with_columns([
