@@ -66,17 +66,22 @@ log ONE summary `DelayRecord` (`ALL_CANDIDATES_MEMO` / `ALL_CANDIDATES_OVERSIZE`
 instead of one per machine, so `delay_reasons` strings and the
 `capacity_shortage` per-machine detail get thinner on those days.
 
-**How to run.** Opt-in via env var **before** the run (e.g. first notebook cell):
+**How to run.** Production runs are triggered by the **Action Flow**, so the
+switch is a papermill parameter: `scan_memo` in the notebook's parameters cell
+(`run_revplan_simulation.ipynb` cell 1), which the params cell writes into
+`REVPLAN_SCAN_MEMO` before the engine runs.
 
-```python
-import os; os.environ["REVPLAN_SCAN_MEMO"] = "1"
-```
+- **Notebook default: `scan_memo = '1'` (ON)** — a triggered run picks the fix
+  up with no flow change.
+- **Baseline / kill switch:** pass `"scan_memo": "0"` in the flow's
+  `/executions` params (or edit cell 1) → byte-identical stock Palantir scan.
+- Other callers (smoke tests, ad-hoc scripts): the **engine-level env default
+  is OFF**; set `REVPLAN_SCAN_MEMO=1` yourself.
 
-Every run log states the switch ("Scan memo: ON/off") next to the config header.
-Unset (or `0`) restores byte-identical Palantir scan behaviour — that's the kill
-switch and the A/B baseline. Recommended rollout: one month with, one without,
-diff the SIM tables, then leave it on. Code: `allocation_engine.py`, blocks
-marked `⚠️ MLWB DIVERGENCE L1/L2` (all gated on `_scan_memo_enabled()`).
+Every run log states the switch ("Scan memo: ON/off") next to the config
+header, so any log can be attributed to its mode. Code:
+`allocation_engine.py`, blocks marked `⚠️ MLWB DIVERGENCE L1/L2` (all gated on
+`_scan_memo_enabled()`).
 
 ## Business-logic changes — ALL OFF by default
 
