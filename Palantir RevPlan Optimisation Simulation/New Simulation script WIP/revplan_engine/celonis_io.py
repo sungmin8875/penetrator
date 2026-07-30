@@ -581,10 +581,21 @@ def read_revenue_plan(params) -> pl.DataFrame:
         # mixes rows across revisions per (model, month) — inflating demand by
         # orders of magnitude (the 43M-unit carryovers). The frontend selects ONE
         # plan version; simulate exactly that one.
-        _rp = str(getattr(params, "revenue_plan_id", None) or "").strip()
+        _rp_raw = str(getattr(params, "revenue_plan_id", None) or "").strip()
+        # 2026-07-30 run: the Action Flow sent "'MP202607-27W-001'" WITH literal
+        # apostrophes -> matched no revision -> silent newest fallback, and the
+        # quoted string was stamped on every allocation row, so demand_shortfall
+        # and production_risk_reconciliation joined 0 rows. Strip wrapping
+        # quote characters before matching.
+        _rp = _rp_raw.strip("'\"").strip()
+        if _rp != _rp_raw:
+            print(f"   ⚠ revenue_plan: stripped quote characters from revenue_plan_id "
+                  f"{_rp_raw!r} -> {_rp!r} (fix the Action Flow mapping with "
+                  "replace(...; \"'\"; \"\") to stop sending them)")
         _revs = df["revenue_plan_id"].unique().to_list()
         if _rp and _rp in _revs:
             df = df.filter(pl.col("revenue_plan_id") == _rp)
+            _chosen = _rp
             print(f"   ✓ revenue_plan: revision {_rp} selected — {df.height:,} rows "
                   f"(of {len(_revs)} revisions in PK1_MPLAN)")
         else:
@@ -593,10 +604,23 @@ def read_revenue_plan(params) -> pl.DataFrame:
             # PK1_MPLAN exposes no release-status column yet; revisit when it does.
             _latest = max(_revs)
             df = df.filter(pl.col("revenue_plan_id") == _latest)
+            _chosen = _latest
             print(f"   ⚠ revenue_plan: revenue_plan_id={_rp!r} not found "
                   f"(revisions: {len(_revs)}) — falling back to NEWEST revision {_latest} "
                   f"({df.height:,} rows). NOTE: newest-by-name approximates the "
                   "'last released' rule (no release-status column on PK1_MPLAN).")
+        # Self-healing stamp: write the revision ACTUALLY simulated back onto the
+        # params, so run_simulation stamps allocation rows with the id the demand
+        # data really came from — the downstream analyses join allocations to
+        # demand on this id, and a raw/stale parameter empties them silently.
+        if getattr(params, "revenue_plan_id", None) != _chosen:
+            try:
+                params.revenue_plan_id = _chosen
+                print(f"   ✓ revenue_plan: params.revenue_plan_id set to the revision "
+                      f"actually used ({_chosen}) so allocation stamps match the demand data")
+            except Exception:  # noqa: BLE001 — read-only params object: stamps stay raw
+                print("   ⚠ revenue_plan: could not update params.revenue_plan_id "
+                      f"(read-only?) — allocation rows will carry {_rp_raw!r}")
         # sales_team is NOT on PK1_MPLAN -> bring it from the model master (PK1_MODEL).
         try:
             mm = _pull("PK1_MODEL", {"model_id": "MODEL_NO", "sales_team": "SALES_TEAM"}).unique("model_id")
