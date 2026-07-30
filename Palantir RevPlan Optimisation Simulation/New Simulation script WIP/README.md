@@ -13,7 +13,7 @@ MLWB notebook. One button click = one `main()` call = one scenario.
 | `priority_generation.py` | **New.** Weighted-priority generation (revenue/margin/delivery + prototype). **OFF by default.** |
 | `outsourced_allocation.py` | **New.** Unmapped-op = 외주 pass-through (customer 2026-07-15 §4): planned-complete after Plan LT, `equipment_id='OUTSOURCED'`, run-log audit of assumed op codes. **ON by default** (`treat_unmapped_as_outsourced=False` restores the old FAILED_NO_EQUIPMENT). |
 | `_foundry_shim.py` | **New.** No-op stand-ins for `transforms.api` + in-memory adapters so the ported `compute()`s run outside Foundry. |
-| `allocation_engine.py` | Byte-identical copy of `revenue_driven_allocation_refactored.py`. |
+| `allocation_engine.py` | Copy of `revenue_driven_allocation_refactored.py`; every departure from the source is a marked `⚠️ MLWB ADDITION/DIVERGENCE` block (outsourced hook, urgent pre-pass, opt-in scan memo — see the Runtime section). |
 | `allocation_helpers.py`, `virtual_lot_creator.py`, `allocation_run_tracker.py`, `config.py`, `models.py` | Byte-identical copies of the engine's pure helpers. |
 | `net_production_demand.py`, `monthly_fulfillment.py` | Byte-identical copies; driven via the shim. |
 
@@ -28,9 +28,55 @@ allocation math is guaranteed identical to the baseline.
 engine + virtual lots → monthly-fulfillment scorecard (+ the engine's `unrouted`
 output, which feeds the scorecard as `new_model_demand_risk`).
 
-**🧩 Stubbed (return empty; port next, from the named file):**
-`capacity_shortage_analysis`, `material_depletion`, `et_jig_capacity_risk_analysis`,
-`demand_shortfall_analysis`, `production_risk_reconciliation`.
+**All five analyses are now ported and live** (2026-07-16): `capacity_shortage_analysis`,
+`material_depletion`, `et_jig_capacity_risk_analysis`, `demand_shortfall_analysis`,
+`production_risk_reconciliation`. Zero stubs remain.
+
+## ⚡ Runtime: saturation scan memo (`REVPLAN_SCAN_MEMO=1`, OFF by default)
+
+**The problem (diagnosed 2026-07-30).** When demand outruns capacity, the stock
+engine re-discovers the same "no room" verdict tens of thousands of times: every
+lot that can't be placed walks `max_delay_days` days × every candidate machine,
+and every virtual lot in a shortfall batch (a 600k-unit shortfall ≈ 100 VLs)
+repeats the identical doomed walk. Measured: a step that allocates costs ~23 µs;
+a doomed 90-day scan costs ~1,000–7,000 µs. After the NotuseFlag equipment filter
+removed ~500 phantom machines (2026-07-16), the simulated factory genuinely
+saturates and runs went from ~20 min to overnight. On top of that, VLs are cut at
+~30 sheets while the median machine `DailyCapa` is 5 — most VL steps physically
+cannot fit **any** machine on **any** day, yet each one burned a full scan.
+
+**The fix — two layers, both sound because `capacity_usage` only ever GROWS
+within a run** (a day proven unable to fit q sheets stays unable to fit ≥ q):
+
+1. **Oversize precheck** — if `sheet_qty` exceeds the largest *total* daily
+   capacity among the step's unblocked candidate machines, fail instantly with
+   the same terminal status/reason/`days_delayed` the full scan would have
+   produced (horizon-exceeded case included; the day-1 fast-track claim other
+   lots would have observed is replicated).
+2. **Full-day memo** — `(process, blocked-set, day) → smallest qty proven not to
+   fit`. Later scans of the same key with qty ≥ proven skip the per-machine
+   sweep. The day walk itself is preserved, so allocation dates, statuses and
+   `days_delayed` are unchanged.
+
+**What changes / what doesn't.** Allocations, dates, equipment choices, failure
+statuses, fast-track state: **identical** (verified: 7-scenario A/B suite +
+6,000-step mixed-saturation run, outcomes and all state dicts equal; 6.1×
+end-to-end there, 40×+ on oversize-dominated shapes). What differs: deduped days
+log ONE summary `DelayRecord` (`ALL_CANDIDATES_MEMO` / `ALL_CANDIDATES_OVERSIZE`)
+instead of one per machine, so `delay_reasons` strings and the
+`capacity_shortage` per-machine detail get thinner on those days.
+
+**How to run.** Opt-in via env var **before** the run (e.g. first notebook cell):
+
+```python
+import os; os.environ["REVPLAN_SCAN_MEMO"] = "1"
+```
+
+Every run log states the switch ("Scan memo: ON/off") next to the config header.
+Unset (or `0`) restores byte-identical Palantir scan behaviour — that's the kill
+switch and the A/B baseline. Recommended rollout: one month with, one without,
+diff the SIM tables, then leave it on. Code: `allocation_engine.py`, blocks
+marked `⚠️ MLWB DIVERGENCE L1/L2` (all gated on `_scan_memo_enabled()`).
 
 ## Business-logic changes — ALL OFF by default
 

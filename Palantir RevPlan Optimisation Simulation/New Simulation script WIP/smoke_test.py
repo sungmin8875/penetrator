@@ -21,6 +21,7 @@ your real schema — that's expected on first contact with live data.
 """
 import sys
 import traceback
+from datetime import date
 
 import polars as pl
 
@@ -28,6 +29,11 @@ from revplan_engine.run_simulation import (
     SimulationParams, main, run_simulation, build_config,
 )
 from revplan_engine import priority_generation
+
+# Live-mode guard raises past start_months to the current month, so pinned
+# fixture months went stale — use next month (차월), like production does.
+_T = date.today()
+SMOKE_MONTH = f"{_T.year + (1 if _T.month == 12 else 0)}{(_T.month % 12) + 1:02d}"
 
 
 def _ok(label):  print(f"  PASS  {label}")
@@ -50,10 +56,10 @@ def t1_imports():
 
 # ------------------------------------------------------------------ T2
 def t2_config():
-    cfg = build_config(SimulationParams(simulation_id="s1", start_month="202603",
+    cfg = build_config(SimulationParams(simulation_id="s1", start_month=SMOKE_MONTH,
                                         max_delay_days=120,
                                         equipment_capacity_overrides={"LDI 노광": 5000}))
-    assert cfg.constraints.start_month == "202603"
+    assert cfg.constraints.start_month == SMOKE_MONTH
     assert cfg.constraints.max_delay_days == 120
     assert cfg.equipment_capacity_overrides.get("LDI 노광") == 5000
     _ok("T2 build_config")
@@ -62,7 +68,7 @@ def t2_config():
 # ------------------------------------------------------------------ T3
 def t3_priority_toggle():
     # OFF (baseline) — passthrough of supplied MES priorities
-    supplied = pl.DataFrame({"model_id": ["M1", "M2"], "month": ["202603", "202603"],
+    supplied = pl.DataFrame({"model_id": ["M1", "M2"], "month": [SMOKE_MONTH, SMOKE_MONTH],
                              "priority": [1, 2]})
     base = priority_generation.build_model_priorities(
         use_weighted_priority=False, supplied_priorities=supplied)
@@ -70,7 +76,7 @@ def t3_priority_toggle():
 
     # ON (weighted) — derive from a tiny revenue plan
     rp = pl.DataFrame({
-        "model_id": ["M1", "M2"], "plan_month": ["202603", "202603"],
+        "model_id": ["M1", "M2"], "plan_month": [SMOKE_MONTH, SMOKE_MONTH],
         "revenue_plan_id": ["RP1", "RP1"], "quantity_ea": [100, 100],
         "amount_krw": [1000, 5000], "margin_krw": [100, 400],
     })
@@ -88,18 +94,18 @@ def t3_priority_toggle():
 def _synthetic_inputs():
     """Tiny but schema-complete fixtures matching read_inputs() column names."""
     revenue_plan = pl.DataFrame({
-        "model_id": ["M1"], "plan_month": ["202603"], "revenue_plan_id": ["RP1"],
+        "model_id": ["M1"], "plan_month": [SMOKE_MONTH], "revenue_plan_id": ["RP1"],
         "quantity_ea": [1000], "amount_krw": [1_000_000], "margin_krw": [200_000],
         "grouping_model": ["M1"], "sales_team": ["ST"], "revenue_type": ["제품"],
     })
     available_inventory = pl.DataFrame({
-        "model_id": ["M1"], "grouping_model": ["M1"], "plan_month": ["202603"],
+        "model_id": ["M1"], "grouping_model": ["M1"], "plan_month": [SMOKE_MONTH],
         "shipped_quantity_ea": [0], "onhand_quantity_ea": [0],
         "total_inventory_ea": [0], "total_inventory_sht": [0],
     })
     model_priorities = pl.DataFrame({
         "simulation_id": ["s1"], "simulation_name": ["smoke"], "revenue_plan_id": ["RP1"],
-        "model_id": ["M1"], "month": ["202603"], "priority": [1],
+        "model_id": ["M1"], "month": [SMOKE_MONTH], "priority": [1],
         "amount_per_unit": [1000.0], "margin_amount_per_unit": [200.0], "__is_deleted": [False],
     })
     wip_lots = pl.DataFrame({
@@ -132,18 +138,24 @@ def _synthetic_inputs():
     equipment_to_process = pl.DataFrame({
         "process_id": ["P1"], "equipment_id": ["E1"], "equipment_group_id": ["G1"],
     })
+    # et_jig_risk port reads the Palantir source's Korean column names verbatim
+    et_jig_master = pl.DataFrame(
+        schema={"대상_모델": pl.Utf8, "JIG대수": pl.Int64, "Capa_Lot": pl.Float64,
+                "Capa_Sheet": pl.Float64, "JIG_상태": pl.Utf8},
+    )
     return {
         "revenue_plan": revenue_plan, "available_inventory": available_inventory,
         "model_priorities": model_priorities, "wip_lots": wip_lots,
         "planned_process_steps": planned_process_steps, "model_master": model_master,
         "model_unit_conversion": model_unit_conversion, "equipment_capacity": equipment_capacity,
         "equipment_constraints": equipment_constraints, "equipment_to_process": equipment_to_process,
+        "et_jig_master": et_jig_master,
     }
 
 
 def t4_full_pipeline():
     params = SimulationParams(simulation_id="s1", simulation_name="smoke",
-                              revenue_plan_id="RP1", start_month="202603")
+                              revenue_plan_id="RP1", start_month=SMOKE_MONTH)
     results = run_simulation(params, inputs=_synthetic_inputs())
     expected = {"allocation", "new_lots_created", "unrouted_model_demand", "failed_allocations",
                 "run_tracker", "monthly_fulfillment_wide", "monthly_fulfillment_long"}

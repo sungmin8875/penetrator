@@ -81,6 +81,7 @@ from .outsourced_allocation import (  # ⚠️ MLWB ADDITION — unmapped op = �
     print_outsourced_summary,
     try_allocate_outsourced_step,
 )
+import os as _os  # ⚠️ MLWB ADDITION — REVPLAN_SCAN_MEMO switch (see _scan_memo_enabled)
 from .allocation_run_tracker import (
     create_config_hash,
     create_run_record,
@@ -1014,6 +1015,54 @@ def _allocate_virtual_lots(
     return vl_units_fulfilled
 
 
+# =============================================================================
+# ⚠️ MLWB DIVERGENCE — saturation scan memo (opt-in: REVPLAN_SCAN_MEMO=1)
+# =============================================================================
+# WHY: within one allocation run, capacity_usage only ever GROWS — a (machine,
+# day) that could not fit q sheets stays unable to fit >= q sheets forever.
+# The stock engine has no memory of that: when demand outruns capacity it
+# re-scans the same provably-full days for every lot in the batch (100 virtual
+# lots x 90 days x N machines of identical, pre-decided failures = the
+# overnight runs of 2026-07). Two layers, both sound under the monotonic-fill
+# invariant, both OFF unless REVPLAN_SCAN_MEMO=1:
+#
+#   L1 oversize precheck — if sheet_qty exceeds the largest TOTAL daily
+#      capacity among the step's unblocked candidate machines, no day can ever
+#      fit it (loaded or empty). Fail immediately with the same terminal
+#      status/reason the 90-day scan would have produced (incl. the horizon-
+#      exceeded case), replicating the loop's one state mutation (day-1
+#      fast-track designation) so other lots see identical state.
+#      Measured 2026-07-30: VLs are cut at ~30 sheets vs median DailyCapa 5 —
+#      most VL steps are oversize-for-everything, each burning a full scan.
+#
+#   L2 full-day memo — (process, blocked-set, day) -> smallest sheet_qty
+#      PROVEN not to fit that day. A later scan of the same key with qty >=
+#      proven skips the per-machine sweep (one summary DelayRecord instead of
+#      one per machine) and walks on to the next day. Allocation decisions,
+#      dates and failure statuses are unchanged; only delay_reasons /
+#      capacity_shortage diagnostics get thinner on deduped days.
+#
+# Kill switch: unset REVPLAN_SCAN_MEMO (or =0) restores byte-identical
+# Palantir behaviour. Validate by diffing SIM tables of one run with/without.
+# =============================================================================
+def _scan_memo_enabled() -> bool:
+    """Read the switch lazily so the notebook can set it any time before run."""
+    return _os.environ.get("REVPLAN_SCAN_MEMO", "0") == "1"
+
+
+def _get_scan_memo(state: AllocationState) -> dict:
+    """(process_id, frozenset(blocked), date) -> min sheet_qty proven unfittable.
+
+    Attached onto AllocationState (same pattern as install_plan_lt_lookup) so its
+    lifetime — and the monotonic-fill invariant it relies on — matches the run's.
+    """
+    memo = getattr(state, "_mlwb_scan_memo", None)
+    if memo is None:
+        memo = {}
+        state._mlwb_scan_memo = memo
+    return memo
+
+
 def _try_allocate_lot_step(
     lot_step: dict,
     model_id: str,
@@ -1193,6 +1242,92 @@ def _try_allocate_lot_step(
     target_eom = parse_month_to_eom_date(target_month)
     has_logged_insufficient_capacity = False
 
+    # =========================================================================
+    # ⚠️ MLWB DIVERGENCE L1 (opt-in REVPLAN_SCAN_MEMO=1) — oversize precheck.
+    # A lot larger than every candidate machine's TOTAL daily capacity can
+    # never fit on any day; skip the scan and emit the identical terminal
+    # verdict the full loop would have reached (see block comment above
+    # _scan_memo_enabled). Outcome parity notes:
+    #   * day-0 horizon exit happens BEFORE fast-track designation (loop order);
+    #   * otherwise the doomed lot still claims its day-1 fast-track slot
+    #     (a real state mutation other lots must see identically);
+    #   * horizon vs INSUFFICIENT_CAPACITY chosen by whichever the walk would
+    #     have hit first; days_delayed matches the walked count.
+    # =========================================================================
+    _memo_on = _scan_memo_enabled()
+    if _memo_on and sheet_qty > 0:
+        _max_total_cap = max(
+            equipment_capacity.get(eq, config.defaults.daily_capacity_sheets)
+            for eq in unblocked_equipment
+        )
+        if sheet_qty > _max_total_cap:
+            _jan1_horizon = date(constraints.max_allocation_year, 1, 1)
+            _days_to_horizon = max(0, (_jan1_horizon - earliest_start).days)
+
+            if _days_to_horizon == 0:
+                # loop iteration 1 would return on its horizon check, before
+                # designating fast-track or logging any delay record
+                return AllocationAttemptResult(
+                    success=False,
+                    days_delayed=0,
+                    delay_records=[],
+                    blocking_reason=f"Scheduling horizon exceeded (reached {earliest_start.year})",
+                )
+
+            _hit_horizon = _days_to_horizon < constraints.max_delay_days
+            _days_final = _days_to_horizon if _hit_horizon else constraints.max_delay_days
+            _end_date = earliest_start + timedelta(days=_days_final)
+
+            # replicate the loop's ONE state mutation: the fast-track claim.
+            # Baseline retries the claim each scanned day (the slot counter is
+            # per-date), so the doomed lot grabs a slot on the FIRST walked day
+            # with one free — other lots must see the identical claim.
+            if not state.is_lot_fast_track(lot_id) and model_priority <= constraints.fast_track_priority_threshold:
+                for _k in range(_days_final):
+                    _d = earliest_start + timedelta(days=_k)
+                    if state.get_fast_track_count(_d) < constraints.fast_track_lots_per_day:
+                        state.designate_lot_fast_track(lot_id, _d)
+                        break
+
+            _records: List[DelayRecord] = [
+                # one summary record in place of days x machines identical ones
+                DelayRecord(
+                    constraint_type=ConstraintType.EQUIPMENT_CAPACITY_FULL,
+                    delay_date=earliest_start,
+                    equipment_id="ALL_CANDIDATES_OVERSIZE",
+                    capacity_used=0,
+                    capacity_total=_max_total_cap,
+                    capacity_needed=sheet_qty,
+                )
+            ]
+            _insufficient_log_date = max(earliest_start, target_eom + timedelta(days=1))
+            if _insufficient_log_date <= _end_date:
+                _records.append(
+                    DelayRecord(
+                        constraint_type=ConstraintType.INSUFFICIENT_CAPACITY,
+                        delay_date=_insufficient_log_date,
+                        equipment_group=lot_step.get("equipment_group_id"),
+                    )
+                )
+
+            if _hit_horizon:
+                _reason = f"Scheduling horizon exceeded (reached {_end_date.year})"
+            else:
+                _reason = (
+                    f"INSUFFICIENT_CAPACITY: Could not allocate within {constraints.max_delay_days} days"
+                    f" [oversize: needs {sheet_qty} sheets > max candidate machine capacity {_max_total_cap}/day]"
+                )
+            return AllocationAttemptResult(
+                success=False,
+                days_delayed=_days_final,
+                delay_records=_records,
+                blocking_reason=_reason,
+            )
+
+    # ⚠️ MLWB DIVERGENCE L2 lookup key (only consulted when _memo_on)
+    _memo = _get_scan_memo(state) if _memo_on else None
+    _blocked_key = frozenset(blocked_equipment) if _memo_on else None
+
     current_date = earliest_start
     days_delayed = 0
     delay_records: List[DelayRecord] = []
@@ -1230,6 +1365,38 @@ def _try_allocate_lot_step(
             current_date += timedelta(days=1)
             days_delayed += 1
             continue
+
+        # =====================================================================
+        # ⚠️ MLWB DIVERGENCE L2 (opt-in REVPLAN_SCAN_MEMO=1): a day already
+        # PROVEN unable to fit <= sheet_qty for this (process, blocked-set)
+        # cannot fit it now — capacity only ever fills within a run. Skip the
+        # per-machine sweep; keep the day walk (dates/days_delayed identical),
+        # emit ONE summary record instead of one per machine, and mirror the
+        # loop's target-EOM INSUFFICIENT_CAPACITY logging before advancing.
+        # =====================================================================
+        if _memo_on:
+            _proven = _memo.get((process_id, _blocked_key, current_date))
+            if _proven is not None and sheet_qty >= _proven:
+                delay_records.append(
+                    DelayRecord(
+                        constraint_type=ConstraintType.EQUIPMENT_CAPACITY_FULL,
+                        delay_date=current_date,
+                        equipment_id="ALL_CANDIDATES_MEMO",
+                        capacity_needed=sheet_qty,
+                    )
+                )
+                if not has_logged_insufficient_capacity and current_date > target_eom:
+                    delay_records.append(
+                        DelayRecord(
+                            constraint_type=ConstraintType.INSUFFICIENT_CAPACITY,
+                            delay_date=current_date,
+                            equipment_group=lot_step.get("equipment_group_id"),
+                        )
+                    )
+                    has_logged_insufficient_capacity = True
+                current_date += timedelta(days=1)
+                days_delayed += 1
+                continue
 
         selected_equipment, remaining_cap, blocked_with_capacity = find_least_loaded_equipment_for_process(
             process_id=process_id,
@@ -1288,6 +1455,15 @@ def _try_allocate_lot_step(
                             capacity_needed=sheet_qty,
                         )
                     )
+
+            # ⚠️ MLWB DIVERGENCE L2: record the proof — sheet_qty did not fit
+            # this (process, blocked-set, day). Monotonic fill makes it final;
+            # keep the SMALLEST proven quantity so the guard stays sound.
+            if _memo_on:
+                _mk = (process_id, _blocked_key, current_date)
+                _prev = _memo.get(_mk)
+                if _prev is None or sheet_qty < _prev:
+                    _memo[_mk] = sheet_qty
 
         if not has_logged_insufficient_capacity and current_date > target_eom:
             equipment_group = lot_step.get("equipment_group_id")
@@ -1838,6 +2014,8 @@ def compute(
         print(f"  Start month: {sim_config.constraints.start_month}")
         print(f"  Max delay days: {sim_config.constraints.max_delay_days}")
         print(f"  Demand buffer: {sim_config.constraints.demand_fulfillment_buffer}")
+        # ⚠️ MLWB ADDITION — make the A/B state of every run auditable from its log
+        print(f"  Scan memo (REVPLAN_SCAN_MEMO): {'ON — saturated-day dedup + oversize precheck' if _scan_memo_enabled() else 'off (stock Palantir scan behaviour)'}")
         if sim_config.equipment_capacity_overrides:
             print(f"  Equipment capacity overrides: {len(sim_config.equipment_capacity_overrides)} groups")
 
