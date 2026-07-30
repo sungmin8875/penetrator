@@ -1654,7 +1654,8 @@ def read_et_jig_master(params) -> pl.DataFrame:
 #        planned_material_arrivals(material_id, plan_date, quantity)
 # ------------------------------------------------------------------------------
 _BOM_SCHEMA = {"model_id": pl.Utf8, "process_id": pl.Utf8, "work_sequence": pl.Int32,
-               "material_id": pl.Utf8, "required_quantity": pl.Float64, "uom": pl.Utf8}
+               "material_id": pl.Utf8, "required_quantity": pl.Float64, "uom": pl.Utf8,
+               "chasu": pl.Float64}
 _MATINV_SCHEMA = {"material_id": pl.Utf8, "onhand_quantity": pl.Float64}
 _ARRIVALS_SCHEMA = {"material_id": pl.Utf8, "plan_date": pl.Date, "quantity": pl.Float64}
 
@@ -1825,6 +1826,25 @@ def read_model_boms(params) -> pl.DataFrame:
         pl.col("required_quantity").cast(pl.Float64, strict=False),
         pl.col("chasu").cast(pl.Float64, strict=False).fill_null(0.0),
     ])
+    # ── CHASU semantics audit (2026-07-30 meeting, 57:11–58:33) ────────────────
+    # Two readings of CHASU coexist and the dedup is only correct under (a):
+    #   (a) REVISION round — same (model, op, seq, material) re-listed per round;
+    #       dedup to the newest is right, else a step counts a material twice.
+    #   (b) PRODUCTION round (1차/2차 적층 …) — the same material recurring at
+    #       DIFFERENT work_seqs; those rows must all survive (they do — the key
+    #       includes work_sequence) because 1차 consumes early and 4차 late.
+    # Print both signals so the run log shows which reading the data supports.
+    _rev_like = (df.group_by(["model_id", "process_id", "work_sequence", "material_id"])
+                   .agg(pl.col("chasu").n_unique().alias("_n"))
+                   .filter(pl.col("_n") > 1).height)
+    _round_like = (df.unique(subset=["model_id", "material_id", "chasu"])
+                     .group_by(["model_id", "material_id"])
+                     .agg(pl.col("chasu").n_unique().alias("_n"))
+                     .filter(pl.col("_n") > 1).height)
+    print(f"   ✓ model_boms CHASU audit: {_rev_like:,} step-material keys carry MULTIPLE "
+          f"chasu (revision-like → deduped to newest); {_round_like:,} (model, material) "
+          f"pairs span multiple chasu (round-like 차수 usage → all kept, timed by work_seq)")
+
     if BOM_CHASU_MODE == "latest_per_model":
         df = df.filter(pl.col("chasu") == pl.col("chasu").max().over("model_id"))
     else:  # per_key (default)
@@ -1849,8 +1869,11 @@ def read_model_boms(params) -> pl.DataFrame:
         print(f"   ⚠ model_boms: PK1_MATERIAL UOM join skipped ({ex}) — uom left null")
         df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("uom"))
 
+    # chasu kept in the output (2026-07-30 meeting): consumption events carry the
+    # 차수 so the 자재 화면 can split 소요 per round — 보유 stays a per-material
+    # total downstream (총 보유 수량, deducted once — see compute_material_depletion).
     out = df.select(["model_id", "process_id", "work_sequence", "material_id",
-                     "required_quantity", "uom"])
+                     "required_quantity", "uom", "chasu"])
     print(f"   ✓ model_boms: {out.height} rows, {out['model_id'].n_unique()} models, "
           f"{out['material_id'].n_unique()} materials (CHASU mode={BOM_CHASU_MODE})")
     return out

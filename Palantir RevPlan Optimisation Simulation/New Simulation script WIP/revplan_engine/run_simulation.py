@@ -619,6 +619,11 @@ def compute_material_depletion(allocation, material_inventories, model_boms, pla
         set final_production_units = the lot's units_produced anyway).
       * List columns (depleting_lot_ids, constraining_material_ids, …) are joined to
         comma-separated strings — the Data Pool push can't take polars List columns.
+      * chasu (차수) is post-joined onto consumption events (customer meeting
+        2026-07-30, 57:11–58:33): 소요 is split per 차수 for the 자재 화면, while
+        보유 차감 stays a per-material TOTAL ("총 보유 수량으로 해야지 혼선이
+        없다") — which the ported module already does via its per-material running
+        balance, so the label adds NO change to any inventory number.
     """
     if allocation.height == 0 or model_boms.height == 0:
         print("   ⏭  material_depletion skipped: "
@@ -651,7 +656,36 @@ def compute_material_depletion(allocation, material_inventories, model_boms, pla
                 pl.col(c).cast(pl.List(pl.Utf8)).list.join(",").alias(c) for c in list_cols])
         return df
 
-    res = tuple(_stringify_lists(o.result) for o in (out_cons, out_depl, out_constr, out_dq))
+    res = list(_stringify_lists(o.result) for o in (out_cons, out_depl, out_constr, out_dq))
+
+    # ── 차수 enrichment (2026-07-30 meeting) ──────────────────────────────────
+    # The ported join drops the BOM's chasu column; re-attach it here so each
+    # consumption event states WHICH round (1차/2차/…) consumed the material.
+    # Purely a label: the running balance above is per-material total, so no
+    # inventory number moves (이중 차감 없음 — the meeting's rule holds already).
+    cons = res[0]
+    if cons.height and "chasu" in model_boms.columns and "material_id" in cons.columns:
+        try:
+            _lut = (model_boms
+                    .select(["model_id", "process_id", "work_sequence", "material_id", "chasu"])
+                    .rename({"work_sequence": "sequence"})
+                    .unique(subset=["model_id", "process_id", "sequence", "material_id"])
+                    .with_columns(pl.col("sequence").cast(cons.schema["sequence"], strict=False)))
+            cons = cons.join(_lut, on=["model_id", "process_id", "sequence", "material_id"], how="left")
+            _multi = (cons.filter(pl.col("chasu").is_not_null())
+                          .unique(subset=["material_id", "chasu"])
+                          .group_by("material_id")
+                          .agg(pl.col("chasu").n_unique().alias("_n"))
+                          .filter(pl.col("_n") > 1).height)
+            res[0] = cons
+            print(f"   ✓ 차수 enrichment: consumption events carry chasu; "
+                  f"{_multi} material(s) consumed across MULTIPLE 차수 — "
+                  "inventory still deducted once per material (총 보유 기준)")
+        except Exception as ex:  # noqa: BLE001 — a label must never sink the analysis
+            print(f"   ⚠ 차수 enrichment skipped ({type(ex).__name__}: {ex}) — "
+                  "consumption events emitted without chasu")
+
+    res = tuple(res)
     print(f"   ✓ material_depletion: {res[0].height} consumption events, "
           f"{res[1].height} depletion events, {res[2].height} constrained lots, "
           f"{res[3].height} data-quality issues")
