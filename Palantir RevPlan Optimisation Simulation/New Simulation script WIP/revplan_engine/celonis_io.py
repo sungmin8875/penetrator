@@ -141,14 +141,16 @@ MATERIAL_SUBINV_CODES = frozenset(
 # Drop unusable equipment everywhere (2026-07-16): flagged machines must contribute
 # no capacity and no candidacy. TWO flags, TWO switches:
 #   * NotuseFlag='Y'  — trusted decommission marker, filtered BY DEFAULT.
-#   * ActiveFlag='N'  — ⚠️ NOT what it looks like: ~2,000 of ~3,500 machines carry 'N'
-#     (measured 2026-07-16), so it cannot mean "retired" — filtering on it amputated
-#     57% of the fleet and sent a run into hours of futile 200-day failure scans.
-#     OPT-IN via REVPLAN_EQUIPMENT_ACTIVEFLAG=1, only after the customer confirms the
-#     column's semantics (open ask: what does PK1_EQUIPMENT.ACTIVE_FLAG really mean?).
+#   * ActiveFlag='N'  — filtered BY DEFAULT since 2026-07-30: the customer confirmed
+#     비활성 설비 제외 (only ActiveFlag='Y' machines are planned on; null counts as
+#     active). ⚠️ Know what this costs: ~2,000 of ~3,500 machines carry 'N'
+#     (measured 2026-07-16), so coverage shrinks hard, more processes lose ALL
+#     machines (audited in read_equipment_to_process — those become outsourced
+#     pass-throughs), and saturation deepens (runtime is protected by the scan
+#     memo). Kill switch: REVPLAN_EQUIPMENT_ACTIVEFLAG=0 -> NotuseFlag only.
 # REVPLAN_EQUIPMENT_ACTIVE_ONLY=0 disables BOTH (include-everything parity mode).
 EQUIPMENT_ACTIVE_ONLY = os.environ.get("REVPLAN_EQUIPMENT_ACTIVE_ONLY", "1") != "0"
-EQUIPMENT_USE_ACTIVEFLAG = os.environ.get("REVPLAN_EQUIPMENT_ACTIVEFLAG", "0") == "1"
+EQUIPMENT_USE_ACTIVEFLAG = os.environ.get("REVPLAN_EQUIPMENT_ACTIVEFLAG", "1") == "1"
 
 # BOM CHASU (차수 / revision round) handling for read_model_boms:
 #   "per_key"          (default) — per (model, op, seq, material) keep the row with the
@@ -1490,9 +1492,22 @@ def read_equipment_to_process(params) -> pl.DataFrame:
         inactive = _inactive_equipment()
         if inactive:
             _before = df.height
+            _procs_before = set(df["process_id"].to_list())
             df = df.filter(~pl.col("equipment_id").is_in(list(inactive)))
             if _before != df.height:
                 print(f"   ✓ equipment_to_process: dropped {_before - df.height} links to inactive equipment")
+                # AUDIT (2026-07-30): a process whose machines are ALL filtered out
+                # vanishes from the candidate map and falls into the outsourced
+                # pass-through (planned-complete via Plan LT, NO capacity cost) —
+                # an inactive-equipment filter silently converting a capacity
+                # constraint into a free pass is the optimistic-bias hole; make it
+                # loud so every run states which operations it affected.
+                _lost = sorted(_procs_before - set(df["process_id"].to_list()))
+                if _lost:
+                    _shown = ", ".join(_lost[:15]) + (f" (+{len(_lost) - 15} more)" if len(_lost) > 15 else "")
+                    print(f"   ⚠ equipment_to_process: {len(_lost)} process(es) lost ALL machines to the "
+                          f"inactive-equipment filter and will be treated as OUTSOURCED pass-through "
+                          f"(no capacity cost — optimistic): {_shown}")
         print(f"   ✓ equipment_to_process: {df.height} distinct process↔equipment links "
               f"({df['process_id'].n_unique()} processes, {df['equipment_id'].n_unique()} equipment)")
         return _add_missing(df, ["process_id", "equipment_id", "equipment_group_id"])
