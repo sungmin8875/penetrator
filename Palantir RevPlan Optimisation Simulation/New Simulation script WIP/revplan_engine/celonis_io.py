@@ -2001,6 +2001,24 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 # per simulation_id.
 # Set CELONIS_OUTPUT_RESET=1 to intentionally drop + recreate all SIM_* tables
 # (schema change, dev cleanup) — this DISCARDS previous runs' rows.
+#
+# TARGETED SCHEMA MIGRATION (2026-07-30): when a release adds a column to ONE
+# table, nuking every SIM_* table is disproportionate and clicking the Data Pool
+# UI is manual toil. Tables named in REVPLAN_SCHEMA_MIGRATE (comma list, logical
+# name or full SIM_ name; '0'/'none' disables) are allowed to fall through to
+# drop+recreate WHEN — and only when — their append fails. Scoped so only the
+# named tables can ever lose history, and only on an actual append failure.
+#   ⚠ Default currently ships as 'material_consumption_events' to self-execute
+#   the 차수(chasu)-column migration on the first post-sync run. REMOVE the
+#   default once that run has landed — a permanent allowlist would let a
+#   transient push error silently reset the table's history.
+_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "material_consumption_events")
+SCHEMA_MIGRATE_TABLES = frozenset(
+    t.strip() for t in _SCHEMA_MIGRATE_RAW.split(",")
+    if t.strip() and t.strip().lower() not in ("0", "none", "off")
+)
+
+
 def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
     print("=== Celonis write_outputs (append-only run history) ===")
 
@@ -2081,16 +2099,27 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
             try:
                 existing.append(pdf)
                 print(f"   ✓ appended {table_name}  (+{df.height} rows)")
+                continue
             except Exception as ex:  # noqa: BLE001
-                # Do NOT fall back to drop/recreate — that would silently erase the run
-                # history this function exists to keep. Typical cause is schema drift
-                # (new/renamed column, string longer than the column width chosen at
-                # creation); resolve it deliberately.
-                print(f"   ✗ append to '{table_name}' failed: {ex}\n"
-                      "      → table NOT dropped (run history preserved). If the schema "
-                      "changed intentionally, re-run with CELONIS_OUTPUT_RESET=1 to "
-                      "recreate the SIM_* tables (discards previous runs).")
-            continue
+                if name in SCHEMA_MIGRATE_TABLES or table_name in SCHEMA_MIGRATE_TABLES:
+                    # Explicitly allowlisted migration: this release changed the
+                    # table's schema, so the failed append is expected — recreate
+                    # WITH the new schema (drop_if_exists on the create path) and
+                    # accept losing this one table's history.
+                    print(f"   ⚠ append to '{table_name}' failed ({ex}) — table is in "
+                          "REVPLAN_SCHEMA_MIGRATE, recreating it with the new schema "
+                          "(THIS table's previous runs are discarded; all others keep history)")
+                else:
+                    # Do NOT fall back to drop/recreate — that would silently erase the run
+                    # history this function exists to keep. Typical cause is schema drift
+                    # (new/renamed column, string longer than the column width chosen at
+                    # creation); resolve it deliberately.
+                    print(f"   ✗ append to '{table_name}' failed: {ex}\n"
+                          "      → table NOT dropped (run history preserved). If the schema "
+                          "changed intentionally, re-run with CELONIS_OUTPUT_RESET=1 to "
+                          "recreate the SIM_* tables (discards previous runs), or name the "
+                          "table in REVPLAN_SCHEMA_MIGRATE for a targeted recreate.")
+                    continue
 
         # ---- create path: first ever run, or explicit CELONIS_OUTPUT_RESET=1
         cfg = _string_column_config(df)
