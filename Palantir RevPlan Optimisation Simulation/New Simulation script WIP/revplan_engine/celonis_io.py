@@ -212,6 +212,7 @@ TABLE_MAP: Dict[str, str] = {
     "PK1_BOM":                   "o_custom_BOM",                  # ✅ 2026-07-16 — model×op×material requirements (ReqQty per EA) → model_boms for material_depletion
     "PK1_MATERIAL":              "o_custom_Material",             # ✅ 2026-07-16 — material master; only UOM is joined onto model_boms (BOM has no UOM column)
     "PK1_PO_ARRIVE_PLAN":        "o_custom_PoArrivePlan",         # ✅ 2026-07-16 — PO arrival plan snapshot (BatchDate/BatchHour batched) → planned_material_arrivals
+    "RTSP_MGR_WIP_HISTORY_N":    "o_custom_WipHistory",           # ✅ 2026-08-04 — per-step WIP event history (실측 착공/완공) → measured_step_durations (customer 2026-07-30: actuals over PlanLt standards)
 }
 COLUMN_MAP: Dict[str, Dict[str, str]] = {
     "PK1_MPLAN": {
@@ -1960,6 +1961,107 @@ def read_planned_material_arrivals(params) -> pl.DataFrame:
     return out
 
 
+# ---- ✅ measured_step_durations  <-  o_custom_WipHistory (2026-08-04) ---------
+# The per-step WIP event history (실측 착공/완공) → median measured durations per
+# (model, op) + per op. Feeds the outsourced pass-through's duration chain as the
+# top preference UNDER REVPLAN_MEASURED_LT=1 (default OFF — ingestion is dark
+# until validated; see outsourced_allocation.install_measured_lt). Customer
+# direction 2026-07-30: actuals over PlanLt standards.
+MEASURED_LT_WINDOW_DAYS = int(os.environ.get("REVPLAN_MEASURED_LT_WINDOW_DAYS", "90") or 90)
+MEASURED_LT_MIN_SAMPLES = int(os.environ.get("REVPLAN_MEASURED_LT_MIN_SAMPLES", "5") or 5)
+
+_MEASURED_LT_SCHEMA = {
+    "model_id": pl.Utf8,               # null on op-level fallback rows
+    "process_id": pl.Utf8,             # site prefix STRIPPED (PK1MF18N -> MF18N)
+    "measured_step_hours": pl.Float64, # median 착공→다음 스텝 착공 (run + queue) — the pass-through duration
+    "measured_proc_hours": pl.Float64, # median 착공→완공 (run only) — reference/diagnostics
+    "sample_n": pl.Int64,
+}
+
+
+def _aggregate_measured_durations(df: pl.DataFrame) -> pl.DataFrame:
+    """Pure transform (unit-testable offline): raw WipHistory events -> duration medians.
+
+    * PROCID arrives site-prefixed (PK1MF18N); strip each row's own site code.
+    * step duration = this row's 착공(ST) -> the LOT's next row's 착공 (run+queue,
+      i.e. "how long until the lot moves on" — what the pass-through must model).
+      A lot's LAST row falls back to its own ST->ED processing time.
+    * MEDIAN per key (robust: a lot that slept 3 months on hold must not drag the
+      mean), kept only at sample_n >= MEASURED_LT_MIN_SAMPLES.
+    * op-level fallback rows carry model_id = null.
+    """
+    df = df.with_columns([
+        pl.col("_st").cast(pl.Datetime, strict=False),
+        pl.col("_ed").cast(pl.Datetime, strict=False),
+    ]).filter(
+        pl.col("_st").is_not_null() & pl.col("model_id").is_not_null()
+        & pl.col("_procid_raw").is_not_null()
+    )
+    if df.height == 0:
+        return pl.DataFrame(schema=_MEASURED_LT_SCHEMA)
+
+    # strip each row's own site prefix (few distinct sites -> literal loop is cheap)
+    for s in df["_site"].drop_nulls().unique().to_list():
+        df = df.with_columns(
+            pl.when((pl.col("_site") == s) & pl.col("_procid_raw").str.starts_with(s))
+              .then(pl.col("_procid_raw").str.slice(len(s)))
+              .otherwise(pl.col("_procid_raw"))
+              .alias("_procid_raw"))
+    df = df.rename({"_procid_raw": "process_id"})
+
+    df = df.sort(["lot_id", "_st"]).with_columns(
+        pl.col("_st").shift(-1).over("lot_id").alias("_next_st"))
+    df = df.with_columns([
+        ((pl.col("_next_st") - pl.col("_st")).dt.total_seconds() / 3600.0).alias("step_h"),
+        ((pl.col("_ed") - pl.col("_st")).dt.total_seconds() / 3600.0).alias("proc_h"),
+    ]).with_columns(
+        pl.coalesce([pl.col("step_h"), pl.col("proc_h")]).alias("step_h")
+    ).filter(pl.col("step_h") > 0)
+
+    def _agg(frame: pl.DataFrame, keys: List[str]) -> pl.DataFrame:
+        return (frame.group_by(keys)
+                .agg([pl.col("step_h").median().alias("measured_step_hours"),
+                      pl.col("proc_h").median().alias("measured_proc_hours"),
+                      pl.len().cast(pl.Int64).alias("sample_n")])
+                .filter(pl.col("sample_n") >= MEASURED_LT_MIN_SAMPLES))
+
+    per_mo = _agg(df, ["model_id", "process_id"])
+    per_op = _agg(df, ["process_id"]).with_columns(
+        pl.lit(None, dtype=pl.Utf8).alias("model_id"))
+    cols = list(_MEASURED_LT_SCHEMA.keys())
+    return pl.concat([per_mo.select(cols), per_op.select(cols)], how="vertical")
+
+
+def read_measured_step_durations(params) -> pl.DataFrame:
+    from datetime import date as _d, timedelta as _td
+    try:
+        cutoff = int((_d.today() - _td(days=MEASURED_LT_WINDOW_DAYS)).strftime("%Y%m%d"))
+        flt = [f"FILTER {_pql_col('RTSP_MGR_WIP_HISTORY_N', 'YYYYMMDD')} >= {cutoff}"]
+        if WIP_SITES:
+            sites = ", ".join(f"'{s}'" for s in sorted(WIP_SITES))
+            flt.append(f"FILTER {_pql_col('RTSP_MGR_WIP_HISTORY_N', 'PLANNING_SITE_CODE')} IN ({sites})")
+        df = _pull("RTSP_MGR_WIP_HISTORY_N", {
+            "lot_id":      "LOTID",
+            "model_id":    "PRODID",
+            "_procid_raw": "PROCID",
+            "_site":       "PLANNING_SITE_CODE",
+            "_st":         "WIPDTTM_ST",
+            "_ed":         "WIPDTTM_ED",
+        }, filters=flt)
+    except Exception as ex:  # noqa: BLE001 — a calibration input must never sink read_inputs
+        return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
+                      f"o_custom_WipHistory pull failed ({ex}) — outsourced timing stays on PlanLt")
+    if df.height == 0:
+        return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
+                      f"o_custom_WipHistory has no events since {cutoff} — outsourced timing stays on PlanLt")
+    out = _aggregate_measured_durations(df)
+    n_mo = int(out.filter(pl.col("model_id").is_not_null()).height)
+    n_op = out.height - n_mo
+    print(f"   ✓ measured_step_durations: {df.height:,} events (last {MEASURED_LT_WINDOW_DAYS}d) → "
+          f"{n_mo:,} (model,op) + {n_op:,} op-level medians (min n={MEASURED_LT_MIN_SAMPLES})")
+    return out
+
+
 # ==============================================================================
 # 6.  read_inputs  — assemble the dict the engine consumes.
 # ==============================================================================
@@ -1981,6 +2083,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
         "model_boms":                read_model_boms(params),                # ✅ o_custom_BOM (+ UOM from o_custom_Material)
         "material_inventories":      read_material_inventories(params),      # ✅ o_custom_OnHand RAW-MTL rows, latest batch
         "planned_material_arrivals": read_planned_material_arrivals(params), # ✅ o_custom_PoArrivePlan, latest batch, future-dated only
+        "measured_step_durations":   read_measured_step_durations(params),   # ✅ 2026-08-04 — o_custom_WipHistory medians (dark until REVPLAN_MEASURED_LT=1)
     }
     # NOTE — remaining stub-analysis inputs: production_risk_reconciliation needs no
     # new sources (it reads other analyses' outputs) — port it alongside its stub.

@@ -79,6 +79,39 @@ def install_plan_lt_lookup(
     state.outsourced_assumed_ops = {}
 
 
+# ⚠️ MLWB ADDITION (2026-08-04, customer 2026-07-30: actuals over standards) —
+# measured step durations from o_custom_WipHistory. Installed module-level by
+# run_simulation (so the ported engine call chain needs no new parameter) and
+# consulted by _plan_lt_days as the TOP duration preference, but ONLY under
+# REVPLAN_MEASURED_LT=1 — default OFF keeps runs byte-identical while the
+# ingestion is validated dark. Keys: (model_id, op) exact, (None, op) fallback.
+import os as _os
+
+_MEASURED_LT: Dict[Tuple[Optional[str], str], float] = {}
+
+
+def _measured_lt_enabled() -> bool:
+    return _os.environ.get("REVPLAN_MEASURED_LT", "0") == "1"
+
+
+def install_measured_lt(df) -> None:
+    """Load the measured_step_durations frame into the module lookup (each run)."""
+    global _MEASURED_LT
+    _MEASURED_LT = {}
+    if df is None or getattr(df, "height", 0) == 0:
+        print("   ▶ measured LT: no data — outsourced timing on PlanLt chain"
+              + ("" if not _measured_lt_enabled() else " (REVPLAN_MEASURED_LT=1 has nothing to use)"))
+        return
+    for r in df.iter_rows(named=True):
+        h = r.get("measured_step_hours")
+        if h is not None and h > 0 and r.get("process_id"):
+            _MEASURED_LT[(r.get("model_id"), r["process_id"])] = float(h)
+    n_mo = sum(1 for k in _MEASURED_LT if k[0] is not None)
+    print(f"   ▶ measured LT installed: {n_mo:,} (model,op) + {len(_MEASURED_LT) - n_mo:,} op-level medians — "
+          + ("ACTIVE (REVPLAN_MEASURED_LT=1): preferred over PlanLt for outsourced steps"
+             if _measured_lt_enabled() else "dark (set REVPLAN_MEASURED_LT=1 to use)"))
+
+
 def _plan_lt_days(
     lot_step: dict,
     model_id: str,
@@ -87,24 +120,35 @@ def _plan_lt_days(
 ) -> int:
     """Planned outsourced duration in whole days for one step (minimum 1).
 
-    Duration source, best first (2026-07-16): the routing's own per-step PlanLt
-    column (99.1% filled — the planner's number), then the customer-validated
-    computation RunLt × sheets + WaitLt (hours; Run per-sheet, Wait per-lot),
-    then `outsourced_step_days_default`.
+    Duration source, best first: MEASURED median (WipHistory 실측, only under
+    REVPLAN_MEASURED_LT=1 — (model,op) then op-level), then (2026-07-16) the
+    routing's own per-step PlanLt column (99.1% filled — the planner's number),
+    then the customer-validated computation RunLt × sheets + WaitLt (hours; Run
+    per-sheet, Wait per-lot), then `outsourced_step_days_default`.
     """
-    plan_lt = lot_step.get("plan_lt")
-    run_lt = lot_step.get("run_lt")
-    wait_lt = lot_step.get("wait_lt")
-    if plan_lt is None and run_lt is None and wait_lt is None:
-        lut = getattr(state, "outsourced_plan_lt_lookup", None) or {}
-        entry = lut.get((model_id, lot_step.get("process_id")), (None, None, None))
-        run_lt, wait_lt = entry[0], entry[1]
-        plan_lt = entry[2] if len(entry) > 2 else None
-    if plan_lt is not None and float(plan_lt) > 0:
-        total_hours = float(plan_lt)
-    else:
-        sheets = lot_step.get(config.columns.sheet_quantity) or 0
-        total_hours = float(run_lt or 0.0) * float(sheets) + float(wait_lt or 0.0)
+    total_hours = None
+    if _MEASURED_LT and _measured_lt_enabled():
+        _pid = lot_step.get("process_id")
+        _m = _MEASURED_LT.get((model_id, _pid))
+        if _m is None:
+            _m = _MEASURED_LT.get((None, _pid))
+        if _m is not None and _m > 0:
+            total_hours = float(_m)
+
+    if total_hours is None:
+        plan_lt = lot_step.get("plan_lt")
+        run_lt = lot_step.get("run_lt")
+        wait_lt = lot_step.get("wait_lt")
+        if plan_lt is None and run_lt is None and wait_lt is None:
+            lut = getattr(state, "outsourced_plan_lt_lookup", None) or {}
+            entry = lut.get((model_id, lot_step.get("process_id")), (None, None, None))
+            run_lt, wait_lt = entry[0], entry[1]
+            plan_lt = entry[2] if len(entry) > 2 else None
+        if plan_lt is not None and float(plan_lt) > 0:
+            total_hours = float(plan_lt)
+        else:
+            sheets = lot_step.get(config.columns.sheet_quantity) or 0
+            total_hours = float(run_lt or 0.0) * float(sheets) + float(wait_lt or 0.0)
     if total_hours <= 0:
         return max(1, int(config.constraints.outsourced_step_days_default))
     days = max(1, ceil(total_hours / _HOURS_PER_DAY))

@@ -821,6 +821,12 @@ def run_simulation(params: SimulationParams,
         config.constraints.logical_passthrough_operation_codes,
     )
 
+    # ⚠️ MLWB ADDITION (2026-08-04): measured step durations (o_custom_WipHistory)
+    # into the outsourced pass-through's duration chain. DARK unless
+    # REVPLAN_MEASURED_LT=1 — the install line logs coverage either way.
+    from .outsourced_allocation import install_measured_lt
+    install_measured_lt(inputs.get("measured_step_durations"))
+
     # --- Tier 1: net demand ---------------------------------------------------
     net_demand = compute_net_production_demand(inputs["revenue_plan"], inputs["available_inventory"])
 
