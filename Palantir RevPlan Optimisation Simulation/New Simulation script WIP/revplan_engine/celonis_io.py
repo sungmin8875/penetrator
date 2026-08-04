@@ -301,6 +301,18 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "BATCH_DATE": "BatchDate",  # snapshot batch — read_planned_material_arrivals keeps the latest batch only
         "BATCH_HOUR": "BatchHour",
     },
+    # o_custom_WipHistory (2026-08-04): object aliases from the user's SQL — some
+    # raw names kept verbatim (LOTID/PRODID/PROCID/YYYYMMDD), timestamps + site
+    # camelized. Only the columns read_measured_step_durations needs.
+    "RTSP_MGR_WIP_HISTORY_N": {
+        "LOTID":              "LOTID",
+        "PRODID":             "PRODID",
+        "PROCID":             "PROCID",             # site-prefixed (PK1MF18N) — stripped in the aggregator
+        "PLANNING_SITE_CODE": "PlanningSiteCode",
+        "WIPDTTM_ST":         "WipdttmSt",
+        "WIPDTTM_ED":         "WipdttmEd",
+        "YYYYMMDD":           "YYYYMMDD",
+    },
     "PK1_ERP_ONHAND_LOT": {
         "MODEL_CODE":        "ModelCode",          # ✅ MODEL_NO form (MGS832G2 / SPCCP30021.KMC2) → model_id, direct join
         "ITEM_TYPE":         "ItemType",           # 'FGI' classifier (not used as a filter — SubinventoryCode is authoritative, per Palantir)
@@ -2034,23 +2046,33 @@ def _aggregate_measured_durations(df: pl.DataFrame) -> pl.DataFrame:
 
 def read_measured_step_durations(params) -> pl.DataFrame:
     from datetime import date as _d, timedelta as _td
-    try:
-        cutoff = int((_d.today() - _td(days=MEASURED_LT_WINDOW_DAYS)).strftime("%Y%m%d"))
-        flt = [f"FILTER {_pql_col('RTSP_MGR_WIP_HISTORY_N', 'YYYYMMDD')} >= {cutoff}"]
-        if WIP_SITES:
-            sites = ", ".join(f"'{s}'" for s in sorted(WIP_SITES))
-            flt.append(f"FILTER {_pql_col('RTSP_MGR_WIP_HISTORY_N', 'PLANNING_SITE_CODE')} IN ({sites})")
-        df = _pull("RTSP_MGR_WIP_HISTORY_N", {
-            "lot_id":      "LOTID",
-            "model_id":    "PRODID",
-            "_procid_raw": "PROCID",
-            "_site":       "PLANNING_SITE_CODE",
-            "_st":         "WIPDTTM_ST",
-            "_ed":         "WIPDTTM_ED",
-        }, filters=flt)
-    except Exception as ex:  # noqa: BLE001 — a calibration input must never sink read_inputs
+    cutoff = int((_d.today() - _td(days=MEASURED_LT_WINDOW_DAYS)).strftime("%Y%m%d"))
+    _cols = {
+        "lot_id":      "LOTID",
+        "model_id":    "PRODID",
+        "_procid_raw": "PROCID",
+        "_site":       "PLANNING_SITE_CODE",
+        "_st":         "WIPDTTM_ST",
+        "_ed":         "WIPDTTM_ED",
+    }
+    _site_flt = []
+    if WIP_SITES:
+        sites = ", ".join(f"'{s}'" for s in sorted(WIP_SITES))
+        _site_flt = [f"FILTER {_pql_col('RTSP_MGR_WIP_HISTORY_N', 'PLANNING_SITE_CODE')} IN ({sites})"]
+    _ymd = _pql_col("RTSP_MGR_WIP_HISTORY_N", "YYYYMMDD")
+    # YYYYMMDD's storage type in the object is unknown (INT vs STRING) — try the
+    # numeric comparison first, retry quoted; the window bound is NOT optional
+    # (the raw history reaches back to 2019), so both failing = empty + warning.
+    df, _last = None, None
+    for _f in (f"FILTER {_ymd} >= {cutoff}", f"FILTER {_ymd} >= '{cutoff}'"):
+        try:
+            df = _pull("RTSP_MGR_WIP_HISTORY_N", _cols, filters=[_f] + _site_flt)
+            break
+        except Exception as ex:  # noqa: BLE001 — a calibration input must never sink read_inputs
+            _last = ex
+    if df is None:
         return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
-                      f"o_custom_WipHistory pull failed ({ex}) — outsourced timing stays on PlanLt")
+                      f"o_custom_WipHistory pull failed ({_last}) — outsourced timing stays on PlanLt")
     if df.height == 0:
         return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
                       f"o_custom_WipHistory has no events since {cutoff} — outsourced timing stays on PlanLt")
