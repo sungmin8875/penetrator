@@ -50,7 +50,7 @@ import polars as pl
 # Defaults are the CONFIRMED ids on lg-innotek.eu-1 (from the connect log), so a fresh kernel
 # resolves with NO env vars. _resolve() accepts an id OR a name, so either works as an override.
 POOL_NAME       = os.environ.get("CELONIS_DATA_POOL",  "41c041fa-1a49-4afa-8799-7779fa61e86c")  # "2. Simulation"
-DATA_MODEL_NAME = os.environ.get("CELONIS_DATA_MODEL", "73bc8779-7ddb-45a0-81dc-5e7f87c6ac92")  # perspective_custom_Simulation (non-test; test: twin is 6570e74c)
+DATA_MODEL_NAME = os.environ.get("CELONIS_DATA_MODEL", "6570e74c-ff78-464e-bd16-142101117d26")  # test:perspective_custom_Simulation — the FRONTEND's perspective (switched 2026-08-04 so notebook+frontend read ONE model; o_custom_WipHistory lives here). Non-test twin (old default): 73bc8779-7ddb-45a0-81dc-5e7f87c6ac92 — restore via env var if the twins turn out to have drifted.
 OE_TABLE_NAME   = os.environ.get("CELONIS_OE_TABLE", "SIMULATION_OE_Table")
 OUTPUT_PREFIX   = os.environ.get("CELONIS_OUTPUT_PREFIX", "SIM_")
 # RTS PRODID == PPS MODEL_NO (validated 2026-07-06: 94.97% of distinct RTSP_WIP_N.PRODID
