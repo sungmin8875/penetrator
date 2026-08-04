@@ -461,6 +461,7 @@ def _enrich_allocation(combined_allocations: pl.DataFrame,
         "model_customer_name", "model_end_customer", "model_sales_team", "grouping_model",
         "unit_process_name", "simulation_name", "simulation_revenue_id",
         "final_production_units", "total_revenue", "total_margin",
+        "modified_group",
     ]
     existing = [c for c in columns_to_drop if c in combined_allocations.columns]
     if existing:
@@ -473,9 +474,15 @@ def _enrich_allocation(combined_allocations: pl.DataFrame,
         pl.col("sales_team").alias("model_sales_team"),
     ]).unique(subset=["model_id"], maintain_order=True)
 
+    # ⚠️ MLWB ADDITION (2026-08-04, frontend ask): ModifiedGroup from the routing
+    # (o_custom_ModelRoute.ModifiedGroup — read as planned_steps' equipment_group_id)
+    # as an EXPLICIT column. The allocation's own equipment_group column is a known
+    # MIXTURE (ModifiedGroup for VL/exploded-WIP rows, raw machine codes on fallback
+    # paths); modified_group is the clean per-(model, op) routing group.
     process_enrichment = planned_steps_df.select([
         "process_id", "model_id", "grouping_model",
         pl.col("process_name").alias("unit_process_name"),
+        pl.col("equipment_group_id").alias("modified_group"),
     ]).unique(subset=["process_id", "model_id"], maintain_order=True)
 
     simulation_enrichment = priorities_df.select([
