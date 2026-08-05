@@ -312,6 +312,10 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "WIPDTTM_ST":         "WipdttmSt",
         "WIPDTTM_ED":         "WipdttmEd",
         "YYYYMMDD":           "YYYYMMDD",
+        # SimWIPMaster lot summary (2026-08-05):
+        "EQPTID":             "EQPTID",
+        "APS_PRODCATEGORY":   "ApsProdcategory",
+        "WIPSHEETQTY_ED":     "WipsheetqtyEd",
     },
     "PK1_ERP_ONHAND_LOT": {
         "MODEL_CODE":        "ModelCode",          # ✅ MODEL_NO form (MGS832G2 / SPCCP30021.KMC2) → model_id, direct join
@@ -2044,7 +2048,16 @@ def _aggregate_measured_durations(df: pl.DataFrame) -> pl.DataFrame:
     return pl.concat([per_mo.select(cols), per_op.select(cols)], how="vertical")
 
 
-def read_measured_step_durations(params) -> pl.DataFrame:
+# One WipHistory pull serves TWO consumers (durations + the SimWIPMaster lot
+# summary) — cached per process so read_inputs hits the backend once.
+_WIPHIST_EVENTS: Optional[pl.DataFrame] = None
+_WIPHIST_ERR: Optional[str] = None
+
+
+def _wip_history_events() -> Tuple[Optional[pl.DataFrame], Optional[str]]:
+    global _WIPHIST_EVENTS, _WIPHIST_ERR
+    if _WIPHIST_EVENTS is not None or _WIPHIST_ERR is not None:
+        return _WIPHIST_EVENTS, _WIPHIST_ERR
     from datetime import date as _d, timedelta as _td
     cutoff = int((_d.today() - _td(days=MEASURED_LT_WINDOW_DAYS)).strftime("%Y%m%d"))
     _cols = {
@@ -2054,6 +2067,10 @@ def read_measured_step_durations(params) -> pl.DataFrame:
         "_site":       "PLANNING_SITE_CODE",
         "_st":         "WIPDTTM_ST",
         "_ed":         "WIPDTTM_ED",
+        # SimWIPMaster lot-summary columns (2026-08-05):
+        "_eqptid":     "EQPTID",
+        "_category":   "APS_PRODCATEGORY",
+        "_sheet_qty":  "WIPSHEETQTY_ED",
     }
     _site_flt = []
     if WIP_SITES:
@@ -2071,16 +2088,85 @@ def read_measured_step_durations(params) -> pl.DataFrame:
         except Exception as ex:  # noqa: BLE001 — a calibration input must never sink read_inputs
             _last = ex
     if df is None:
+        _WIPHIST_ERR = str(_last)
+        return None, _WIPHIST_ERR
+    _WIPHIST_EVENTS = df
+    return df, None
+
+
+def read_measured_step_durations(params) -> pl.DataFrame:
+    df, _err = _wip_history_events()
+    if df is None:
         return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
-                      f"o_custom_WipHistory pull failed ({_last}) — outsourced timing stays on PlanLt")
+                      f"o_custom_WipHistory pull failed ({_err}) — outsourced timing stays on PlanLt")
+    df = df.select(["lot_id", "model_id", "_procid_raw", "_site", "_st", "_ed"])
     if df.height == 0:
         return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
-                      f"o_custom_WipHistory has no events since {cutoff} — outsourced timing stays on PlanLt")
+                      f"o_custom_WipHistory has no events in the last {MEASURED_LT_WINDOW_DAYS}d — "
+                      "outsourced timing stays on PlanLt")
     out = _aggregate_measured_durations(df)
     n_mo = int(out.filter(pl.col("model_id").is_not_null()).height)
     n_op = out.height - n_mo
     print(f"   ✓ measured_step_durations: {df.height:,} events (last {MEASURED_LT_WINDOW_DAYS}d) → "
           f"{n_mo:,} (model,op) + {n_op:,} op-level medians (min n={MEASURED_LT_MIN_SAMPLES})")
+    return out
+
+
+# ---- ✅ wip_history_lot_summary  (SimWIPMaster's ACTUAL side, 2026-08-05) ------
+# One row per lot from the WipHistory event log: verified past to annotate the
+# simulated future. Join-safety proven in the backend (2026-08-05 SQL check):
+# GROUP BY lot -> 1:1, row conservation 794,442 = 794,442; 87.5% of real sim
+# lots matched (the rest had no movement inside the window — itself a signal).
+_WIP_LOT_SUMMARY_SCHEMA = {
+    "lot_id": pl.Utf8,
+    "actual_first_start": pl.Datetime,
+    "actual_last_event": pl.Datetime,
+    "actual_steps_done": pl.Int64,
+    "actual_last_process": pl.Utf8,    # site prefix stripped (PK1ML20N -> ML20N)
+    "actual_last_equipment": pl.Utf8,
+    "actual_sheet_qty": pl.Float64,
+    "aps_prodcategory": pl.Utf8,       # 양산/시재 classification
+}
+
+
+def _aggregate_wip_lot_summary(df: pl.DataFrame) -> pl.DataFrame:
+    """Pure transform (unit-testable offline): raw WipHistory events -> 1 row/lot."""
+    df = df.with_columns(pl.col("_st").cast(pl.Datetime, strict=False)).filter(
+        pl.col("_st").is_not_null() & pl.col("lot_id").is_not_null())
+    if df.height == 0:
+        return pl.DataFrame(schema=_WIP_LOT_SUMMARY_SCHEMA)
+    for s in df["_site"].drop_nulls().unique().to_list():
+        df = df.with_columns(
+            pl.when((pl.col("_site") == s) & pl.col("_procid_raw").str.starts_with(s))
+              .then(pl.col("_procid_raw").str.slice(len(s)))
+              .otherwise(pl.col("_procid_raw"))
+              .alias("_procid_raw"))
+    df = df.sort(["lot_id", "_st"])
+    out = df.group_by("lot_id").agg([
+        pl.col("_st").min().alias("actual_first_start"),
+        pl.col("_st").max().alias("actual_last_event"),
+        pl.len().cast(pl.Int64).alias("actual_steps_done"),
+        pl.col("_procid_raw").last().alias("actual_last_process"),
+        pl.col("_eqptid").last().alias("actual_last_equipment"),
+        pl.col("_sheet_qty").cast(pl.Float64, strict=False).last().alias("actual_sheet_qty"),
+        pl.col("_category").drop_nulls().first().alias("aps_prodcategory"),
+    ])
+    return out.select(list(_WIP_LOT_SUMMARY_SCHEMA.keys()))
+
+
+def read_wip_history_lot_summary(params) -> pl.DataFrame:
+    df, _err = _wip_history_events()
+    if df is None:
+        return _empty("wip_history_lot_summary", _WIP_LOT_SUMMARY_SCHEMA,
+                      f"o_custom_WipHistory pull failed ({_err}) — SimWIPMaster gets null actual columns")
+    try:
+        out = _aggregate_wip_lot_summary(
+            df.select(["lot_id", "_procid_raw", "_site", "_st", "_eqptid", "_category", "_sheet_qty"]))
+    except Exception as ex:  # noqa: BLE001 — an annotation input must never sink read_inputs
+        return _empty("wip_history_lot_summary", _WIP_LOT_SUMMARY_SCHEMA,
+                      f"lot-summary aggregation failed ({ex}) — SimWIPMaster gets null actual columns")
+    print(f"   ✓ wip_history_lot_summary: {out.height:,} lots with actual history "
+          f"(last {MEASURED_LT_WINDOW_DAYS}d)")
     return out
 
 
@@ -2106,6 +2192,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
         "material_inventories":      read_material_inventories(params),      # ✅ o_custom_OnHand RAW-MTL rows, latest batch
         "planned_material_arrivals": read_planned_material_arrivals(params), # ✅ o_custom_PoArrivePlan, latest batch, future-dated only
         "measured_step_durations":   read_measured_step_durations(params),   # ✅ 2026-08-04 — o_custom_WipHistory medians (dark until REVPLAN_MEASURED_LT=1)
+        "wip_history_lot_summary":   read_wip_history_lot_summary(params),   # ✅ 2026-08-05 — 1 row/lot actuals (SimWIPMaster's ACTUAL side; same cached pull)
     }
     # NOTE — remaining stub-analysis inputs: production_risk_reconciliation needs no
     # new sources (it reads other analyses' outputs) — port it alongside its stub.

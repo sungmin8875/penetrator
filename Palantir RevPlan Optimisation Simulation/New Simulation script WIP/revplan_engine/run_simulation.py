@@ -447,6 +447,91 @@ def run_allocation_engine(*,
     return AllocationResult(allocation_df, new_lots_df, unrouted_df, failed_df, run_tracker_df)
 
 
+def build_wip_master(allocation: pl.DataFrame, lot_summary) -> pl.DataFrame:
+    """SIM_WIPMaster: allocation grain + per-lot ACTUAL history columns (left join).
+
+    Row count is provably preserved (lot_summary is 1 row/lot by construction);
+    an empty/missing summary degrades to all-null actual columns, same schema."""
+    if allocation is None or allocation.height == 0:
+        return pl.DataFrame()
+    _actual_cols = ["actual_first_start", "actual_last_event", "actual_steps_done",
+                    "actual_last_process", "actual_last_equipment", "actual_sheet_qty",
+                    "aps_prodcategory"]
+    if lot_summary is None or lot_summary.height == 0:
+        return allocation.with_columns([
+            pl.lit(None, dtype=pl.Datetime).alias("actual_first_start"),
+            pl.lit(None, dtype=pl.Datetime).alias("actual_last_event"),
+            pl.lit(None, dtype=pl.Int64).alias("actual_steps_done"),
+            pl.lit(None, dtype=pl.Utf8).alias("actual_last_process"),
+            pl.lit(None, dtype=pl.Utf8).alias("actual_last_equipment"),
+            pl.lit(None, dtype=pl.Float64).alias("actual_sheet_qty"),
+            pl.lit(None, dtype=pl.Utf8).alias("aps_prodcategory"),
+        ])
+    out = allocation.join(lot_summary.unique(subset=["lot_id"]), on="lot_id", how="left")
+    _matched = out.filter(pl.col("actual_steps_done").is_not_null())["lot_id"].n_unique()
+    print(f"   ✓ SimWIPMaster: {out.height:,} rows; {_matched:,} lots carry actual history")
+    return out
+
+
+def build_stock_master(cons_events, inventories, arrivals, allocation) -> pl.DataFrame:
+    """SIM_StockMaster: material x date event ledger (OPENING/CONSUMPTION/ARRIVAL).
+
+    CONSUMPTION rows come from material_consumption_events (running balances +
+    chasu already computed there); OPENING = one row per material from OnHand;
+    ARRIVAL = PoArrivePlan rows (⚠ purchaser's ESTIMATE, customer 2026-07-30).
+    Stamped with the run's allocation_run_id/simulation_id for latest-run views."""
+    schema = {
+        "material_id": pl.Utf8, "event_date": pl.Date, "event_type": pl.Utf8,
+        "quantity": pl.Float64, "running_inventory_after": pl.Float64,
+        "running_inventory_after_with_arrivals": pl.Float64, "chasu": pl.Float64,
+        "lot_id": pl.Utf8, "model_id": pl.Utf8,
+        "simulation_id": pl.Utf8, "allocation_run_id": pl.Utf8,
+    }
+    _run_id, _sim_id = None, None
+    if allocation is not None and allocation.height:
+        if "allocation_run_id" in allocation.columns:
+            _run_id = allocation["allocation_run_id"][0]
+        if "simulation_id" in allocation.columns:
+            _sim_id = allocation["simulation_id"][0]
+
+    def _conform(df: pl.DataFrame) -> pl.DataFrame:
+        for c, dt in schema.items():
+            if c not in df.columns:
+                df = df.with_columns(pl.lit(None, dtype=dt).alias(c))
+            else:
+                df = df.with_columns(pl.col(c).cast(dt, strict=False))
+        return df.select(list(schema.keys()))
+
+    parts = []
+    if cons_events is not None and getattr(cons_events, "height", 0):
+        _m = {k: v for k, v in {"allocated_date": "event_date",
+                                "total_consumption": "quantity"}.items()
+              if k in cons_events.columns}
+        c = cons_events.rename(_m)
+        c = c.with_columns(pl.lit("CONSUMPTION").alias("event_type"))
+        parts.append(_conform(c))
+    if inventories is not None and getattr(inventories, "height", 0):
+        o = inventories.group_by("material_id").agg(
+            pl.col("onhand_quantity").sum().alias("quantity"))
+        o = o.with_columns([pl.lit("OPENING").alias("event_type"),
+                            pl.lit(_sim_id, dtype=pl.Utf8).alias("simulation_id"),
+                            pl.lit(_run_id, dtype=pl.Utf8).alias("allocation_run_id")])
+        parts.append(_conform(o))
+    if arrivals is not None and getattr(arrivals, "height", 0):
+        a = arrivals.rename({"plan_date": "event_date"} if "plan_date" in arrivals.columns else {})
+        a = a.with_columns([pl.lit("ARRIVAL").alias("event_type"),
+                            pl.lit(_sim_id, dtype=pl.Utf8).alias("simulation_id"),
+                            pl.lit(_run_id, dtype=pl.Utf8).alias("allocation_run_id")])
+        parts.append(_conform(a))
+    if not parts:
+        return pl.DataFrame(schema=schema)
+    out = pl.concat(parts, how="vertical").sort(["material_id", "event_date"])
+    _n = {t: out.filter(pl.col("event_type") == t).height for t in ("OPENING", "CONSUMPTION", "ARRIVAL")}
+    print(f"   ✓ SimStockMaster: {out.height:,} rows "
+          f"(OPENING {_n['OPENING']:,} / CONSUMPTION {_n['CONSUMPTION']:,} / ARRIVAL {_n['ARRIVAL']:,})")
+    return out
+
+
 def _enrich_allocation(combined_allocations: pl.DataFrame,
                        model_df: pl.DataFrame,
                        planned_steps_df: pl.DataFrame,
@@ -909,8 +994,23 @@ def run_simulation(params: SimulationParams,
         eng.allocation, eng.failed, fulfillment_wide, et_jig_risk)
 
     print("=== RevPlan simulation: done ===")
+    # --- ⚠️ MLWB ADDITION (2026-08-05): two frontend master tables ---------------
+    # SimWIPMaster  = allocation steps + 1-row-per-lot ACTUAL history (WipHistory).
+    #   Join proven in the backend beforehand (SQL check 2026-08-05): lot-level
+    #   aggregate -> 1:1, row conservation exact, 87.5% real-lot coverage in the
+    #   window. VL lots carry null actual columns by construction (no past).
+    # SimStockMaster = material x date ledger: OPENING (OnHand) + CONSUMPTION
+    #   (allocation x BOM, from material_consumption_events, chasu-labeled) +
+    #   ARRIVAL (PoArrivePlan) rows — the 자재 쇼티지 그래프 backing table.
+    wip_master = build_wip_master(eng.allocation, inputs.get("wip_history_lot_summary"))
+    stock_master = build_stock_master(
+        material_consumption_events, inputs.get("material_inventories"),
+        inputs.get("planned_material_arrivals"), eng.allocation)
+
     results = {
         "allocation": eng.allocation,
+        "WIPMaster": wip_master,
+        "StockMaster": stock_master,
         "new_lots_created": eng.new_lots,
         "unrouted_model_demand": eng.unrouted,
         "failed_allocations": eng.failed,
