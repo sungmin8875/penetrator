@@ -293,6 +293,7 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
     "PK1_MATERIAL": {
         "MATERIAL_NO": "MaterialNo",
         "UOM":         "UOM",
+        "COP_CLASS":   "CopClass",   # 자재 등급 (SimStockMaster; possibly the ABC/D classification)
     },
     "PK1_PO_ARRIVE_PLAN": {
         "PART_NO":    "PartNo",     # material code — same key space as BOM MaterialNo
@@ -2154,6 +2155,32 @@ def _aggregate_wip_lot_summary(df: pl.DataFrame) -> pl.DataFrame:
     return out.select(list(_WIP_LOT_SUMMARY_SCHEMA.keys()))
 
 
+# ---- ✅ material_classes  <-  o_custom_Material (2026-08-05) -------------------
+# CopClass per material for SimStockMaster (frontend spec: Date / MaterialNo /
+# 보유·사용·보충량 / CopClass). Column-name resilient: the object's alias is
+# expected as 'CopClass' (mapped), but a raw 'COP_CLASS' build is retried too.
+_MATERIAL_CLASS_SCHEMA = {"material_id": pl.Utf8, "cop_class": pl.Utf8}
+
+
+def read_material_classes(params) -> pl.DataFrame:
+    _last = None
+    for colmap in ({"material_id": "MATERIAL_NO", "cop_class": "COP_CLASS"},   # mapped -> "CopClass"
+                   {"material_id": "MaterialNo",  "cop_class": "COP_CLASS"},   # raw alias variants
+                   {"material_id": "MaterialNo",  "cop_class": "CopClass"}):
+        try:
+            df = _pull("PK1_MATERIAL", colmap, distinct=True)
+            df = (df.filter(pl.col("material_id").is_not_null())
+                    .unique(subset=["material_id"], maintain_order=True))
+            n_cls = int(df.select(pl.col("cop_class").is_not_null().sum()).item()) if df.height else 0
+            print(f"   ✓ material_classes: {df.height:,} materials, {n_cls:,} with CopClass")
+            return df
+        except Exception as ex:  # noqa: BLE001
+            _last = ex
+    return _empty("material_classes", _MATERIAL_CLASS_SCHEMA,
+                  f"CopClass not readable from o_custom_Material ({_last}) — "
+                  "SimStockMaster.cop_class will be null")
+
+
 def read_wip_history_lot_summary(params) -> pl.DataFrame:
     df, _err = _wip_history_events()
     if df is None:
@@ -2193,6 +2220,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
         "planned_material_arrivals": read_planned_material_arrivals(params), # ✅ o_custom_PoArrivePlan, latest batch, future-dated only
         "measured_step_durations":   read_measured_step_durations(params),   # ✅ 2026-08-04 — o_custom_WipHistory medians (dark until REVPLAN_MEASURED_LT=1)
         "wip_history_lot_summary":   read_wip_history_lot_summary(params),   # ✅ 2026-08-05 — 1 row/lot actuals (SimWIPMaster's ACTUAL side; same cached pull)
+        "material_classes":          read_material_classes(params),          # ✅ 2026-08-05 — CopClass per material (SimStockMaster)
     }
     # NOTE — remaining stub-analysis inputs: production_risk_reconciliation needs no
     # new sources (it reads other analyses' outputs) — port it alongside its stub.
@@ -2225,7 +2253,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 #   transient push error silently reset a table's history.
 #   ⚠ Current one-shot: 'allocation' (2026-08-04 — modified_group column added to
 #   the SimAllocation output). REMOVE once the recreated table has landed.
-_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation")
+_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation,StockMaster")
 SCHEMA_MIGRATE_TABLES = frozenset(
     t.strip() for t in _SCHEMA_MIGRATE_RAW.split(",")
     if t.strip() and t.strip().lower() not in ("0", "none", "off")

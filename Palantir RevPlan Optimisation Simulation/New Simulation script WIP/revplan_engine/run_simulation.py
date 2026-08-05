@@ -473,62 +473,96 @@ def build_wip_master(allocation: pl.DataFrame, lot_summary) -> pl.DataFrame:
     return out
 
 
-def build_stock_master(cons_events, inventories, arrivals, allocation) -> pl.DataFrame:
-    """SIM_StockMaster: material x date event ledger (OPENING/CONSUMPTION/ARRIVAL).
+def build_stock_master(cons_events, inventories, arrivals, allocation,
+                       material_classes=None) -> pl.DataFrame:
+    """SIM_StockMaster: DAILY PIVOT — one row per (material x date). Frontend spec
+    (2026-08-05): Date / MaterialNo / 보유량 / 사용량 / 보충량 / CopClass.
 
-    CONSUMPTION rows come from material_consumption_events (running balances +
-    chasu already computed there); OPENING = one row per material from OnHand;
-    ARRIVAL = PoArrivePlan rows (⚠ purchaser's ESTIMATE, customer 2026-07-30).
-    Stamped with the run's allocation_run_id/simulation_id for latest-run views."""
+      usage_qty      (사용량) daily Σ simulated consumption (allocation x BOM)
+      replenish_qty  (보충량) daily Σ planned PO arrivals (⚠ purchaser's ESTIMATE)
+      balance_qty    (보유량) end-of-day: OnHand + 누적보충 − 누적사용
+      balance_qty_wo_arrivals   same WITHOUT planned arrivals — the gap between
+                     the two curves is exactly the PO-arrival risk
+      cop_class      from o_custom_Material
+
+    Each material also gets one opening row (its first activity date − 1) so the
+    chart starts at the OnHand level. Lot/차수/step detail deliberately lives in
+    SIM_material_consumption_events (the drill-down), not here."""
     schema = {
-        "material_id": pl.Utf8, "event_date": pl.Date, "event_type": pl.Utf8,
-        "quantity": pl.Float64, "running_inventory_after": pl.Float64,
-        "running_inventory_after_with_arrivals": pl.Float64, "chasu": pl.Float64,
-        "lot_id": pl.Utf8, "model_id": pl.Utf8,
+        "material_id": pl.Utf8, "stock_date": pl.Date,
+        "usage_qty": pl.Float64, "replenish_qty": pl.Float64,
+        "balance_qty": pl.Float64, "balance_qty_wo_arrivals": pl.Float64,
+        "opening_qty": pl.Float64, "cop_class": pl.Utf8,
         "simulation_id": pl.Utf8, "allocation_run_id": pl.Utf8,
     }
     _run_id, _sim_id = None, None
-    if allocation is not None and allocation.height:
+    if allocation is not None and getattr(allocation, "height", 0):
         if "allocation_run_id" in allocation.columns:
             _run_id = allocation["allocation_run_id"][0]
         if "simulation_id" in allocation.columns:
             _sim_id = allocation["simulation_id"][0]
 
-    def _conform(df: pl.DataFrame) -> pl.DataFrame:
-        for c, dt in schema.items():
-            if c not in df.columns:
-                df = df.with_columns(pl.lit(None, dtype=dt).alias(c))
-            else:
-                df = df.with_columns(pl.col(c).cast(dt, strict=False))
-        return df.select(list(schema.keys()))
-
-    parts = []
+    daily = []
     if cons_events is not None and getattr(cons_events, "height", 0):
-        _m = {k: v for k, v in {"allocated_date": "event_date",
-                                "total_consumption": "quantity"}.items()
-              if k in cons_events.columns}
-        c = cons_events.rename(_m)
-        c = c.with_columns(pl.lit("CONSUMPTION").alias("event_type"))
-        parts.append(_conform(c))
-    if inventories is not None and getattr(inventories, "height", 0):
-        o = inventories.group_by("material_id").agg(
-            pl.col("onhand_quantity").sum().alias("quantity"))
-        o = o.with_columns([pl.lit("OPENING").alias("event_type"),
-                            pl.lit(_sim_id, dtype=pl.Utf8).alias("simulation_id"),
-                            pl.lit(_run_id, dtype=pl.Utf8).alias("allocation_run_id")])
-        parts.append(_conform(o))
+        daily.append(cons_events
+                     .group_by(["material_id", "allocated_date"])
+                     .agg(pl.col("total_consumption").sum().alias("usage_qty"))
+                     .rename({"allocated_date": "stock_date"})
+                     .with_columns(pl.lit(0.0).alias("replenish_qty")))
     if arrivals is not None and getattr(arrivals, "height", 0):
-        a = arrivals.rename({"plan_date": "event_date"} if "plan_date" in arrivals.columns else {})
-        a = a.with_columns([pl.lit("ARRIVAL").alias("event_type"),
-                            pl.lit(_sim_id, dtype=pl.Utf8).alias("simulation_id"),
-                            pl.lit(_run_id, dtype=pl.Utf8).alias("allocation_run_id")])
-        parts.append(_conform(a))
-    if not parts:
+        daily.append(arrivals
+                     .group_by(["material_id", "plan_date"])
+                     .agg(pl.col("quantity").sum().alias("replenish_qty"))
+                     .rename({"plan_date": "stock_date"})
+                     .with_columns(pl.lit(0.0).alias("usage_qty")))
+    if not daily:
         return pl.DataFrame(schema=schema)
-    out = pl.concat(parts, how="vertical").sort(["material_id", "event_date"])
-    _n = {t: out.filter(pl.col("event_type") == t).height for t in ("OPENING", "CONSUMPTION", "ARRIVAL")}
-    print(f"   ✓ SimStockMaster: {out.height:,} rows "
-          f"(OPENING {_n['OPENING']:,} / CONSUMPTION {_n['CONSUMPTION']:,} / ARRIVAL {_n['ARRIVAL']:,})")
+
+    df = (pl.concat([d.select(["material_id", "stock_date", "usage_qty", "replenish_qty"])
+                     .with_columns([pl.col("stock_date").cast(pl.Date, strict=False),
+                                    pl.col("usage_qty").cast(pl.Float64, strict=False),
+                                    pl.col("replenish_qty").cast(pl.Float64, strict=False)])
+                     for d in daily], how="vertical")
+          .group_by(["material_id", "stock_date"])
+          .agg([pl.col("usage_qty").sum(), pl.col("replenish_qty").sum()])
+          .filter(pl.col("stock_date").is_not_null()))
+
+    opening = (inventories.group_by("material_id")
+               .agg(pl.col("onhand_quantity").sum().alias("opening_qty"))
+               if inventories is not None and getattr(inventories, "height", 0)
+               else pl.DataFrame(schema={"material_id": pl.Utf8, "opening_qty": pl.Float64}))
+    df = df.join(opening, on="material_id", how="left").with_columns(
+        pl.col("opening_qty").fill_null(0.0))
+
+    # opening row per material (day before its first activity) — chart anchor
+    anchor = (df.group_by("material_id")
+              .agg([pl.col("stock_date").min().alias("stock_date"),
+                    pl.col("opening_qty").first()])
+              .with_columns([
+                  (pl.col("stock_date") - pl.duration(days=1)).alias("stock_date"),
+                  pl.lit(0.0).alias("usage_qty"), pl.lit(0.0).alias("replenish_qty")]))
+    df = pl.concat([df, anchor.select(df.columns)], how="vertical")
+
+    df = df.sort(["material_id", "stock_date"]).with_columns([
+        pl.col("usage_qty").cum_sum().over("material_id").alias("_cum_use"),
+        pl.col("replenish_qty").cum_sum().over("material_id").alias("_cum_arr"),
+    ]).with_columns([
+        (pl.col("opening_qty") + pl.col("_cum_arr") - pl.col("_cum_use")).alias("balance_qty"),
+        (pl.col("opening_qty") - pl.col("_cum_use")).alias("balance_qty_wo_arrivals"),
+    ]).drop(["_cum_use", "_cum_arr"])
+
+    if material_classes is not None and getattr(material_classes, "height", 0):
+        df = df.join(material_classes.select(["material_id", "cop_class"])
+                     .unique(subset=["material_id"]), on="material_id", how="left")
+    else:
+        df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("cop_class"))
+
+    df = df.with_columns([pl.lit(_sim_id, dtype=pl.Utf8).alias("simulation_id"),
+                          pl.lit(_run_id, dtype=pl.Utf8).alias("allocation_run_id")])
+    out = df.select(list(schema.keys())).sort(["material_id", "stock_date"])
+    print(f"   ✓ SimStockMaster (daily pivot): {out.height:,} material-date rows, "
+          f"{out['material_id'].n_unique():,} materials, "
+          f"{int(out.select(pl.col('cop_class').is_not_null().sum()).item()):,} rows classed")
     return out
 
 
@@ -999,13 +1033,14 @@ def run_simulation(params: SimulationParams,
     #   Join proven in the backend beforehand (SQL check 2026-08-05): lot-level
     #   aggregate -> 1:1, row conservation exact, 87.5% real-lot coverage in the
     #   window. VL lots carry null actual columns by construction (no past).
-    # SimStockMaster = material x date ledger: OPENING (OnHand) + CONSUMPTION
-    #   (allocation x BOM, from material_consumption_events, chasu-labeled) +
-    #   ARRIVAL (PoArrivePlan) rows — the 자재 쇼티지 그래프 backing table.
+    # SimStockMaster = DAILY PIVOT per (material x date): 사용량/보충량/보유량 +
+    #   CopClass (frontend spec 2026-08-05) — the 자재 쇼티지 그래프 backing table;
+    #   lot/차수 drill-down stays in SIM_material_consumption_events.
     wip_master = build_wip_master(eng.allocation, inputs.get("wip_history_lot_summary"))
     stock_master = build_stock_master(
         material_consumption_events, inputs.get("material_inventories"),
-        inputs.get("planned_material_arrivals"), eng.allocation)
+        inputs.get("planned_material_arrivals"), eng.allocation,
+        material_classes=inputs.get("material_classes"))
 
     results = {
         "allocation": eng.allocation,
