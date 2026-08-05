@@ -2335,7 +2335,15 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
         pdf = df.to_pandas()
 
         # ---- append path: table exists and no reset requested -> add this run's rows
-        existing = None if reset else _find_table(table_name)
+        # Migration-listed tables skip the append ENTIRELY and recreate: waiting
+        # for an append failure proved unreliable (2026-08-05 — the platform
+        # silently ADDED the new columns and appended, leaving SIM_StockMaster a
+        # union of old ledger + new pivot schemas instead of failing).
+        _migrate_this = name in SCHEMA_MIGRATE_TABLES or table_name in SCHEMA_MIGRATE_TABLES
+        if _migrate_this and not reset and _find_table(table_name) is not None:
+            print(f"   ⚠ {table_name} is in REVPLAN_SCHEMA_MIGRATE — recreating with the "
+                  "current schema (THIS table's previous runs are discarded; all others keep history)")
+        existing = None if (reset or _migrate_this) else _find_table(table_name)
         if existing is not None:
             try:
                 existing.append(pdf)
