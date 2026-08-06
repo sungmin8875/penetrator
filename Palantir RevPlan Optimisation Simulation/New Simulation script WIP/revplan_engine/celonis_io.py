@@ -255,6 +255,8 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "PROCID":          "OperationCode",   # ⚠️ ASSUMPTION — confirm process-id source (OperationCode vs OpCode)
         "PROCNAME":        "OperationName",
         "OP_MACHINE_CODE": "ModifiedGroup",   # ✅ the real equipment group (better than the raw machine code)
+        "CHASU":           "CHASU",           # ✅ 2026-08-06 — routing 차수 (confirmed on the object) -> SimWIPMaster
+        "GUBUN":           "GubunColumn",     # ✅ 2026-08-06 — process-group label (투입/외층/SR …) -> SimWIPMaster
         "RUN_LT":          "RunLt",           # ✅ per-sheet run time (hours) — Gumi §5 (P1: confirm column exists)
         "WAIT_LT":         "WaitLt",          # ✅ per-lot wait time (hours)  — Gumi §5 (P1: confirm column exists)
     },
@@ -317,6 +319,8 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "EQPTID":             "EQPTID",
         "APS_PRODCATEGORY":   "ApsProdcategory",
         "WIPSHEETQTY_ED":     "WipsheetqtyEd",
+        "WIPPNLQTY_ED":       "WippnlqtyEd",
+        "WIPQTY_ED":          "WipqtyEd",
     },
     "PK1_ERP_ONHAND_LOT": {
         "MODEL_CODE":        "ModelCode",          # ✅ MODEL_NO form (MGS832G2 / SPCCP30021.KMC2) → model_id, direct join
@@ -989,7 +993,9 @@ def _explode_wip_remaining_route(current: pl.DataFrame) -> pl.DataFrame:
         "_route_group":   "OP_MACHINE_CODE",
     }
     rt = None
-    for extra in ({"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt"},
+    for extra in ({"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt",
+                   "chasu": "CHASU", "gubun": "GUBUN"},
+                  {"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt"},
                   {"run_lt": "RUN_LT", "wait_lt": "WAIT_LT"},
                   {}):
         try:
@@ -1102,7 +1108,9 @@ def read_planned_process_steps(params) -> pl.DataFrame:
     # (RunLt/WaitLt) but their presence is UNCONFIRMED (plan prerequisite P1); _pull errors
     # on a missing column, so try WITH them and fall back WITHOUT (lead-time proxy stays).
     df = None
-    for extra in ({"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt"},
+    for extra in ({"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt",
+                   "chasu": "CHASU", "gubun": "GUBUN"},
+                  {"run_lt": "RUN_LT", "wait_lt": "WAIT_LT", "plan_lt": "PlanLt"},
                   {"run_lt": "RUN_LT", "wait_lt": "WAIT_LT"},
                   {}):
         try:
@@ -2072,6 +2080,8 @@ def _wip_history_events() -> Tuple[Optional[pl.DataFrame], Optional[str]]:
         "_eqptid":     "EQPTID",
         "_category":   "APS_PRODCATEGORY",
         "_sheet_qty":  "WIPSHEETQTY_ED",
+        "_pnl_qty":    "WIPPNLQTY_ED",
+        "_unit_qty":   "WIPQTY_ED",
     }
     _site_flt = []
     if WIP_SITES:
@@ -2126,6 +2136,8 @@ _WIP_LOT_SUMMARY_SCHEMA = {
     "actual_last_process": pl.Utf8,    # site prefix stripped (PK1ML20N -> ML20N)
     "actual_last_equipment": pl.Utf8,
     "actual_sheet_qty": pl.Float64,
+    "actual_pnl_qty": pl.Float64,
+    "actual_unit_qty": pl.Float64,
     "aps_prodcategory": pl.Utf8,       # 양산/시재 classification
 }
 
@@ -2150,6 +2162,8 @@ def _aggregate_wip_lot_summary(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("_procid_raw").last().alias("actual_last_process"),
         pl.col("_eqptid").last().alias("actual_last_equipment"),
         pl.col("_sheet_qty").cast(pl.Float64, strict=False).last().alias("actual_sheet_qty"),
+        pl.col("_pnl_qty").cast(pl.Float64, strict=False).last().alias("actual_pnl_qty"),
+        pl.col("_unit_qty").cast(pl.Float64, strict=False).last().alias("actual_unit_qty"),
         pl.col("_category").drop_nulls().first().alias("aps_prodcategory"),
     ])
     return out.select(list(_WIP_LOT_SUMMARY_SCHEMA.keys()))
@@ -2188,7 +2202,8 @@ def read_wip_history_lot_summary(params) -> pl.DataFrame:
                       f"o_custom_WipHistory pull failed ({_err}) — SimWIPMaster gets null actual columns")
     try:
         out = _aggregate_wip_lot_summary(
-            df.select(["lot_id", "_procid_raw", "_site", "_st", "_eqptid", "_category", "_sheet_qty"]))
+            df.select(["lot_id", "_procid_raw", "_site", "_st", "_eqptid", "_category",
+                       "_sheet_qty", "_pnl_qty", "_unit_qty"]))
     except Exception as ex:  # noqa: BLE001 — an annotation input must never sink read_inputs
         return _empty("wip_history_lot_summary", _WIP_LOT_SUMMARY_SCHEMA,
                       f"lot-summary aggregation failed ({ex}) — SimWIPMaster gets null actual columns")
@@ -2253,7 +2268,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 #   transient push error silently reset a table's history.
 #   ⚠ Current one-shot: 'allocation' (2026-08-04 — modified_group column added to
 #   the SimAllocation output). REMOVE once the recreated table has landed.
-_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation,StockMaster")
+_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation,StockMaster,WIPMaster")
 SCHEMA_MIGRATE_TABLES = frozenset(
     t.strip() for t in _SCHEMA_MIGRATE_RAW.split(",")
     if t.strip() and t.strip().lower() not in ("0", "none", "off")

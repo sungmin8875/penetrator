@@ -447,29 +447,52 @@ def run_allocation_engine(*,
     return AllocationResult(allocation_df, new_lots_df, unrouted_df, failed_df, run_tracker_df)
 
 
-def build_wip_master(allocation: pl.DataFrame, lot_summary) -> pl.DataFrame:
-    """SIM_WIPMaster: allocation grain + per-lot ACTUAL history columns (left join).
+def build_wip_master(allocation: pl.DataFrame, lot_summary,
+                     planned_steps=None) -> pl.DataFrame:
+    """SIM_WIPMaster: allocation grain + per-lot ACTUAL history + routing 차수/구분.
 
-    Row count is provably preserved (lot_summary is 1 row/lot by construction);
-    an empty/missing summary degrades to all-null actual columns, same schema."""
+    Row count is provably preserved: lot_summary is 1 row/lot by construction and
+    the routing lookup is deduped on the exact step key (model, op, seq). Missing
+    inputs degrade to null columns, schema stable."""
     if allocation is None or allocation.height == 0:
         return pl.DataFrame()
-    _actual_cols = ["actual_first_start", "actual_last_event", "actual_steps_done",
-                    "actual_last_process", "actual_last_equipment", "actual_sheet_qty",
-                    "aps_prodcategory"]
+
+    _null_actuals = [
+        pl.lit(None, dtype=pl.Datetime).alias("actual_first_start"),
+        pl.lit(None, dtype=pl.Datetime).alias("actual_last_event"),
+        pl.lit(None, dtype=pl.Int64).alias("actual_steps_done"),
+        pl.lit(None, dtype=pl.Utf8).alias("actual_last_process"),
+        pl.lit(None, dtype=pl.Utf8).alias("actual_last_equipment"),
+        pl.lit(None, dtype=pl.Float64).alias("actual_sheet_qty"),
+        pl.lit(None, dtype=pl.Float64).alias("actual_pnl_qty"),
+        pl.lit(None, dtype=pl.Float64).alias("actual_unit_qty"),
+        pl.lit(None, dtype=pl.Utf8).alias("aps_prodcategory"),
+    ]
     if lot_summary is None or lot_summary.height == 0:
-        return allocation.with_columns([
-            pl.lit(None, dtype=pl.Datetime).alias("actual_first_start"),
-            pl.lit(None, dtype=pl.Datetime).alias("actual_last_event"),
-            pl.lit(None, dtype=pl.Int64).alias("actual_steps_done"),
-            pl.lit(None, dtype=pl.Utf8).alias("actual_last_process"),
-            pl.lit(None, dtype=pl.Utf8).alias("actual_last_equipment"),
-            pl.lit(None, dtype=pl.Float64).alias("actual_sheet_qty"),
-            pl.lit(None, dtype=pl.Utf8).alias("aps_prodcategory"),
-        ])
-    out = allocation.join(lot_summary.unique(subset=["lot_id"]), on="lot_id", how="left")
-    _matched = out.filter(pl.col("actual_steps_done").is_not_null())["lot_id"].n_unique()
-    print(f"   ✓ SimWIPMaster: {out.height:,} rows; {_matched:,} lots carry actual history")
+        out = allocation.with_columns(_null_actuals)
+    else:
+        out = allocation.join(lot_summary.unique(subset=["lot_id"]), on="lot_id", how="left")
+
+    # routing 차수/공정구분 per exact step key (2026-08-06; CHASU confirmed on the
+    # ModelRoute object). Unlike modified_group (per model+op), CHASU varies by
+    # WorkSeq — the join key must include sequence.
+    if (planned_steps is not None and getattr(planned_steps, "height", 0)
+            and "chasu" in planned_steps.columns):
+        _rt = (planned_steps
+               .select(["model_id", "process_id", "sequence", "chasu"]
+                       + (["gubun"] if "gubun" in planned_steps.columns else []))
+               .unique(subset=["model_id", "process_id", "sequence"])
+               .with_columns(pl.col("sequence").cast(out.schema["sequence"], strict=False)))
+        out = out.join(_rt, on=["model_id", "process_id", "sequence"], how="left")
+    else:
+        out = out.with_columns(pl.lit(None, dtype=pl.Float64).alias("chasu"))
+    if "gubun" not in out.columns:
+        out = out.with_columns(pl.lit(None, dtype=pl.Utf8).alias("gubun"))
+
+    _matched = (out.filter(pl.col("actual_steps_done").is_not_null())["lot_id"].n_unique()
+                if "actual_steps_done" in out.columns else 0)
+    print(f"   ✓ SimWIPMaster: {out.height:,} rows; {_matched:,} lots carry actual history; "
+          f"{int(out.select(pl.col('chasu').is_not_null().sum()).item()):,} rows with routing 차수")
     return out
 
 
@@ -1036,7 +1059,8 @@ def run_simulation(params: SimulationParams,
     # SimStockMaster = DAILY PIVOT per (material x date): 사용량/보충량/보유량 +
     #   CopClass (frontend spec 2026-08-05) — the 자재 쇼티지 그래프 backing table;
     #   lot/차수 drill-down stays in SIM_material_consumption_events.
-    wip_master = build_wip_master(eng.allocation, inputs.get("wip_history_lot_summary"))
+    wip_master = build_wip_master(eng.allocation, inputs.get("wip_history_lot_summary"),
+                                  planned_steps=inputs.get("planned_process_steps"))
     stock_master = build_stock_master(
         material_consumption_events, inputs.get("material_inventories"),
         inputs.get("planned_material_arrivals"), eng.allocation,
