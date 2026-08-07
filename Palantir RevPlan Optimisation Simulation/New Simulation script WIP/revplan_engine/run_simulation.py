@@ -515,7 +515,7 @@ def build_stock_master(cons_events, inventories, arrivals, allocation,
         "material_id": pl.Utf8, "stock_date": pl.Date,
         "usage_qty": pl.Float64, "replenish_qty": pl.Float64,
         "balance_qty": pl.Float64, "balance_qty_wo_arrivals": pl.Float64,
-        "opening_qty": pl.Float64, "cop_class": pl.Utf8,
+        "initial_onhand_qty": pl.Float64, "cop_class": pl.Utf8,
         "simulation_id": pl.Utf8, "allocation_run_id": pl.Utf8,
     }
     _run_id, _sim_id = None, None
@@ -551,16 +551,16 @@ def build_stock_master(cons_events, inventories, arrivals, allocation,
           .filter(pl.col("stock_date").is_not_null()))
 
     opening = (inventories.group_by("material_id")
-               .agg(pl.col("onhand_quantity").sum().alias("opening_qty"))
+               .agg(pl.col("onhand_quantity").sum().alias("initial_onhand_qty"))
                if inventories is not None and getattr(inventories, "height", 0)
-               else pl.DataFrame(schema={"material_id": pl.Utf8, "opening_qty": pl.Float64}))
+               else pl.DataFrame(schema={"material_id": pl.Utf8, "initial_onhand_qty": pl.Float64}))
     df = df.join(opening, on="material_id", how="left").with_columns(
-        pl.col("opening_qty").fill_null(0.0))
+        pl.col("initial_onhand_qty").fill_null(0.0))
 
     # opening row per material (day before its first activity) — chart anchor
     anchor = (df.group_by("material_id")
               .agg([pl.col("stock_date").min().alias("stock_date"),
-                    pl.col("opening_qty").first()])
+                    pl.col("initial_onhand_qty").first()])
               .with_columns([
                   (pl.col("stock_date") - pl.duration(days=1)).alias("stock_date"),
                   pl.lit(0.0).alias("usage_qty"), pl.lit(0.0).alias("replenish_qty")]))
@@ -570,8 +570,8 @@ def build_stock_master(cons_events, inventories, arrivals, allocation,
         pl.col("usage_qty").cum_sum().over("material_id").alias("_cum_use"),
         pl.col("replenish_qty").cum_sum().over("material_id").alias("_cum_arr"),
     ]).with_columns([
-        (pl.col("opening_qty") + pl.col("_cum_arr") - pl.col("_cum_use")).alias("balance_qty"),
-        (pl.col("opening_qty") - pl.col("_cum_use")).alias("balance_qty_wo_arrivals"),
+        (pl.col("initial_onhand_qty") + pl.col("_cum_arr") - pl.col("_cum_use")).alias("balance_qty"),
+        (pl.col("initial_onhand_qty") - pl.col("_cum_use")).alias("balance_qty_wo_arrivals"),
     ]).drop(["_cum_use", "_cum_arr"])
 
     if material_classes is not None and getattr(material_classes, "height", 0):

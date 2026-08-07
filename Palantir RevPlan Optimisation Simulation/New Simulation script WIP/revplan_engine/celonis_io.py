@@ -2268,7 +2268,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 #   transient push error silently reset a table's history.
 #   ⚠ Current one-shot: 'allocation' (2026-08-04 — modified_group column added to
 #   the SimAllocation output). REMOVE once the recreated table has landed.
-_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation,StockMaster,WIPMaster")
+_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "StockMaster")  # one-shot: opening_qty -> initial_onhand_qty rename (2026-08-07); remove after landing
 SCHEMA_MIGRATE_TABLES = frozenset(
     t.strip() for t in _SCHEMA_MIGRATE_RAW.split(",")
     if t.strip() and t.strip().lower() not in ("0", "none", "off")
@@ -2360,11 +2360,22 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
                   "current schema (THIS table's previous runs are discarded; all others keep history)")
         existing = None if (reset or _migrate_this) else _find_table(table_name)
         if existing is not None:
-            try:
-                existing.append(pdf)
-                print(f"   ✓ appended {table_name}  (+{df.height} rows)")
+            _append_err = None
+            for _try in (1, 2):  # 2026-08-07: platform 400 'Parquet validation'
+                try:              # errors self-describe as transient — retry once
+                    existing.append(pdf)
+                    print(f"   ✓ appended {table_name}  (+{df.height} rows)"
+                          + ("  (retry succeeded)" if _try == 2 else ""))
+                    _append_err = None
+                    break
+                except Exception as _ex:  # noqa: BLE001
+                    _append_err = _ex
+                    if _try == 1:
+                        import time as _t; _t.sleep(5)
+            if _append_err is None:
                 continue
-            except Exception as ex:  # noqa: BLE001
+            ex = _append_err
+            if True:  # preserved structure of the original error handling below
                 if name in SCHEMA_MIGRATE_TABLES or table_name in SCHEMA_MIGRATE_TABLES:
                     # Explicitly allowlisted migration: this release changed the
                     # table's schema, so the failed append is expected — recreate
@@ -2393,15 +2404,21 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
         attempts = ([{"drop_if_exists": True, "force": True, "column_config": cfg}] if cfg else [])
         attempts.append({"drop_if_exists": True, "force": True})
         ok, last = False, None
-        for kw in attempts:
-            try:
-                p.create_table(pdf, table_name, **kw)
-                note = "" if "column_config" in kw else "  (⚠ default VARCHAR(80))"
-                print(f"   ✓ created {table_name}  ({df.height} rows){note}")
-                ok = True
+        for _round in (1, 2):  # 2026-08-07: retry the whole attempt list once (transient 400s)
+            for kw in attempts:
+                try:
+                    p.create_table(pdf, table_name, **kw)
+                    note = "" if "column_config" in kw else "  (⚠ default VARCHAR(80))"
+                    print(f"   ✓ created {table_name}  ({df.height} rows){note}"
+                          + ("  (retry succeeded)" if _round == 2 else ""))
+                    ok = True
+                    break
+                except Exception as ex:  # noqa: BLE001
+                    last = ex
+            if ok:
                 break
-            except Exception as ex:  # noqa: BLE001
-                last = ex
+            if _round == 1:
+                import time as _t; _t.sleep(5)
         if not ok:
             print(f"   ✗ write '{table_name}' failed: {last}")
     # NOTE: no SIMULATION_OE_Table status flip here — pool tables aren't row-updatable via

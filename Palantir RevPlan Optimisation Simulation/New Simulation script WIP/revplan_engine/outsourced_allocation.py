@@ -247,8 +247,10 @@ def print_outsourced_summary(state: AllocationState) -> None:
         listed = ", ".join(f"{op}×{cnt} (worst {days}d)" for op, (cnt, days) in worst[:15])
         more = f" (+{len(worst) - 15} more ops)" if len(worst) > 15 else ""
         print(
-            f"  ⚠ PLAN-LT OUTLIERS CAPPED: {sum(c for c, _ in capped.values())} outsourced steps "
+            f"  ⚠ OUTSOURCED DURATION OUTLIERS CAPPED: {sum(c for c, _ in capped.values())} steps "
             f"exceeded outsourced_step_max_days and were capped:\n"
             f"    {listed}{more}\n"
-            "    → audit: these ops' routing PlanLt values are garbage — fix at the source (RTS)."
+            "    → audit: duration source is measured WipHistory medians when "
+            "REVPLAN_MEASURED_LT=1 (lots historically SLEEPING that long at these ops), "
+            "else routing PlanLt garbage — either way worth showing the customer."
         )
