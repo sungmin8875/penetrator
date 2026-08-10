@@ -248,6 +248,11 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "BOM_MATERIAL_LIST":     "BomMaterialList",
         "BOM_MATERIAL_SHORTAGE": "BomMaterialShortageCnt",
         "BOM_MATERIAL_TOTAL":    "BomMaterialTotalCnt",
+        # ✅ 2026-08-10 — lot hold status (object definition confirmed: both verbatim).
+        # STATE ∈ {HOLD, WAIT, PROC}; WIPHOLD ∈ {Y, N} (Y ⟺ STATE=HOLD). Holds are
+        # released over time, so the latest-snapshot read gives "currently held".
+        "STATE":   "STATE",
+        "WIPHOLD": "WIPHOLD",
     },
     "RTSP_MODEL_ROUTING_M": {
         "PRODID":          "ModelNo",         # ✅ routing carries the PPS MODEL_NO directly -> NO crosswalk
@@ -874,6 +879,21 @@ WIP_SITES = frozenset(
 # "remaining_route" (default) | "current_only" (filters, no explode) | "legacy" (old raw read)
 WIP_MODE = os.environ.get("REVPLAN_WIP_MODE", "remaining_route").strip().lower()
 
+# ⚠️ MLWB ADDITION (2026-08-10) — HOLD-lot exclusion. Baseline (= Palantir) schedules
+# lots that are currently ON HOLD (STATE=HOLD / WIPHOLD=Y at the latest snapshot) as if
+# they were free to run — an optimistic bias, since sampled lots sit held for months.
+# With REVPLAN_EXCLUDE_HOLD_LOTS=1 those lots are dropped from wip_lots BEFORE the
+# remaining-route explosion (their demand then surfaces as shortfall/virtual lots
+# instead of phantom fulfilled supply). Engine default OFF; the notebook param
+# `exclude_hold` turns it ON for triggered runs (same pattern as measured_lt).
+def _exclude_hold_enabled() -> bool:
+    return os.environ.get("REVPLAN_EXCLUDE_HOLD_LOTS", "0") == "1"
+
+
+# held lot ids of the current read — consumed by _add_urgency_flag to warn when an
+# URGENT lot was dropped for being on hold (HOLD wins; the conflict must be visible).
+_HELD_LOT_IDS: set = set()
+
 
 def read_wip_lots(params) -> pl.DataFrame:
     cols = {
@@ -910,21 +930,26 @@ def read_wip_lots(params) -> pl.DataFrame:
         # receipt_target_day: the lot's real due date (WipDaily.ReceiptTargetDay,
         # ~58% filled — G4 2026-07-16). Urgent lots use it as their target month
         # instead of the synthetic start-month stamp; null falls back downstream.
-        try:
-            df = _pull("RTSP_WIP_N", {**cols,
-                                      "receipt_target_day": "ReceiptTargetDay",
-                                      "_snapshot_date":     "SnapshotDate",
-                                      "_site":              "PlanningSiteCode"},
-                       filters=wip_flt)
-        except Exception:  # noqa: BLE001 — retry without the due-date column
+        # Ladder degrades column-by-column: hold-status cols first (older objects
+        # without STATE/WIPHOLD just lose the HOLD exclusion), then the due date.
+        _hold_cols = {"_state": "STATE", "_wiphold": "WIPHOLD"}
+        _snap_cols = {"_snapshot_date": "SnapshotDate", "_site": "PlanningSiteCode"}
+        _attempts = [
+            {**cols, **_hold_cols, "receipt_target_day": "ReceiptTargetDay", **_snap_cols},
+            {**cols, "receipt_target_day": "ReceiptTargetDay", **_snap_cols},
+            {**cols, **_snap_cols},
+        ]
+        for _i, _cm in enumerate(_attempts):
             try:
-                df = _pull("RTSP_WIP_N", {**cols,
-                                          "_snapshot_date": "SnapshotDate",
-                                          "_site":          "PlanningSiteCode"},
-                           filters=wip_flt)
-            except Exception as ex:  # noqa: BLE001
-                print(f"   ⚠ wip_lots: SnapshotDate/PlanningSiteCode not readable ({type(ex).__name__}); "
-                      "falling back to the legacy raw read (NO snapshot/site filter)")
+                df = _pull("RTSP_WIP_N", _cm, filters=wip_flt)
+                if "_state" not in df.columns and _exclude_hold_enabled():
+                    print("   ⚠ wip_lots: STATE/WIPHOLD not readable — HOLD exclusion "
+                          "requested (REVPLAN_EXCLUDE_HOLD_LOTS=1) but INACTIVE this run")
+                break
+            except Exception as ex:  # noqa: BLE001 — degrade to the next column set
+                if _i == len(_attempts) - 1:
+                    print(f"   ⚠ wip_lots: SnapshotDate/PlanningSiteCode not readable ({type(ex).__name__}); "
+                          "falling back to the legacy raw read (NO snapshot/site filter)")
     if df is None:
         df = _pull("RTSP_WIP_N", cols)
     if df.height:
@@ -955,7 +980,37 @@ def read_wip_lots(params) -> pl.DataFrame:
         df = df.sort("sequence", descending=True).unique(subset=["lot_id"], keep="first")
         print(f"   ✓ wip_lots: latest snapshot {max_snap} — {df.height:,} current lots "
               f"(of {pre_lots:,} lots seen across all snapshots)")
-    df = df.drop([c for c in ("_snapshot_date", "_site") if c in df.columns])
+
+    # (2b) HOLD-lot exclusion (⚠️ MLWB ADDITION 2026-08-10, gated). After the
+    # latest-snapshot dedupe "held" means CURRENTLY held — released holds show their
+    # released state in the newest snapshot. Nulls are kept (unknown ≠ held).
+    global _HELD_LOT_IDS
+    _HELD_LOT_IDS = set()
+    if df.height and ("_state" in df.columns or "_wiphold" in df.columns):
+        _hold_expr = pl.lit(False)
+        if "_wiphold" in df.columns:
+            _hold_expr = _hold_expr | (
+                pl.col("_wiphold").cast(pl.Utf8).str.strip_chars()
+                  .str.to_uppercase().eq("Y").fill_null(False))
+        if "_state" in df.columns:
+            _hold_expr = _hold_expr | (
+                pl.col("_state").cast(pl.Utf8).str.strip_chars()
+                  .str.to_uppercase().eq("HOLD").fill_null(False))
+        held = df.filter(_hold_expr)
+        if held.height:
+            _HELD_LOT_IDS = set(held["lot_id"].to_list())
+            _sht = float(held["latest_sheet_quantity"].cast(pl.Float64, strict=False).sum() or 0)
+            _ea = float(held["latest_unit_quantity"].cast(pl.Float64, strict=False).sum() or 0)
+            if _exclude_hold_enabled():
+                df = df.filter(~_hold_expr)
+                print(f"   ✓ HOLD 제외: {held.height:,} lots ({_sht:,.0f} SHT / {_ea:,.0f} EA) "
+                      f"excluded — STATE=HOLD/WIPHOLD=Y at latest snapshot; "
+                      f"{df.height:,} schedulable lots remain")
+            else:
+                print(f"   ▶ HOLD lots: {held.height:,} currently held ({_sht:,.0f} SHT / "
+                      f"{_ea:,.0f} EA) — KEPT and scheduled as free "
+                      "(set REVPLAN_EXCLUDE_HOLD_LOTS=1 to exclude)")
+    df = df.drop([c for c in ("_snapshot_date", "_site", "_state", "_wiphold") if c in df.columns])
 
     # (3) remaining-route explosion — plan the road AHEAD of each lot.
     if WIP_MODE == "remaining_route" and df.height:
@@ -1083,6 +1138,16 @@ def _add_urgency_flag(df: pl.DataFrame) -> pl.DataFrame:
         stale = max(urg.height - matched, 0)          # urgency rows with no live WIP lot
         print(f"   ✓ urgency: {matched} WIP lots flagged urgent; "
               f"{stale} urgency rows not in WIP (stale — ignored)")
+
+        # HOLD beats urgent: a lot dropped by the HOLD exclusion cannot be urgent-
+        # scheduled, but the conflict must be visible — MES says 급 while MES says hold.
+        if _HELD_LOT_IDS and _exclude_hold_enabled():
+            conflict = _HELD_LOT_IDS & set(urg["lot_id"].to_list())
+            if conflict:
+                sample = ", ".join(sorted(conflict)[:10])
+                print(f"   ⚠ URGENT∩HOLD conflict: {len(conflict)} lot(s) are flagged urgent "
+                      f"but currently ON HOLD — excluded from scheduling (HOLD wins): {sample}"
+                      + (" …" if len(conflict) > 10 else ""))
 
         df = df.join(urg, on="lot_id", how="left")
         return df.with_columns(pl.col("urgency_creation_date").is_not_null().alias("is_urgent"))
