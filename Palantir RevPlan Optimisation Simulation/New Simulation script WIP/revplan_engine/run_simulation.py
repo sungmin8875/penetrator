@@ -496,6 +496,101 @@ def build_wip_master(allocation: pl.DataFrame, lot_summary,
     return out
 
 
+def _cop_usage_enabled() -> bool:
+    # ⚠️ MLWB ADDITION (2026-08-11, customer/Aria rule). Engine default OFF; the
+    # notebook param `cop_usage` turns it ON for triggered runs (measured_lt pattern).
+    import os as _os
+    return _os.environ.get("REVPLAN_COP_USAGE", "0") == "1"
+
+
+def _apply_cop_usage_rule(cons_events, material_classes, allocation):
+    """CopClass 소요량 집계 기준 (Aria 2026-08-11) — SimStockMaster usage ONLY.
+
+    Re-times each lot's total consumption of a material to the date the lot
+    passes its class anchor step; materials outside the rule keep today's
+    every-BOM-step timing:
+      A → the lot's WorkSeq=2 step        (원자재: 투입 시점)
+      B → the lot's M510N step            (도금 공정)
+      C → the lot's M520N step
+      D → excluded from usage entirely
+    Anchor missing from the lot's simulated route → usage 0 for that lot
+    (confirmed by Aria: "0으로 집계하면 될 것 같아요" — for in-flight WIP past
+    the anchor this is also the truer model: that issue already happened and is
+    inside the current OnHand snapshot).
+    Scope note: SIM_material_consumption_events and the depletion analysis are
+    NOT re-timed (open question 1 to the customer) — the drill-down keeps
+    BOM-step dates, so chart and drill-down timing differ by design for A/B/C.
+    """
+    need_ev = {"lot_id", "material_id", "allocated_date", "total_consumption"}
+    need_al = {"lot_id", "process_id", "sequence", "allocated_date"}
+    if (material_classes is None or getattr(material_classes, "height", 0) == 0
+            or allocation is None or getattr(allocation, "height", 0) == 0
+            or not need_ev.issubset(set(cons_events.columns))
+            or not need_al.issubset(set(allocation.columns))):
+        print("   ⚠ CopClass usage rule requested (REVPLAN_COP_USAGE=1) but inputs "
+              "incomplete — usage stays on BOM-step timing")
+        return cons_events
+
+    cls = (material_classes.select(["material_id", "cop_class"])
+           .unique(subset=["material_id"])
+           .with_columns(pl.col("cop_class").cast(pl.Utf8).str.strip_chars()
+                         .str.to_uppercase().fill_null("").alias("_cls"))
+           .select(["material_id", "_cls"]))
+    ev = cons_events.join(cls, on="material_id", how="left").with_columns(
+        pl.col("_cls").fill_null(""))
+
+    plain = ev.filter(~pl.col("_cls").is_in(["A", "B", "C", "D"]))
+    d_drop = ev.filter(pl.col("_cls") == "D")
+    ruled = ev.filter(pl.col("_cls").is_in(["A", "B", "C"]))
+
+    out_cols = [c for c in cons_events.columns]
+    parts = [plain.select(out_cols)]
+    n_retimed = n_zeroed = 0
+    q_zeroed = 0.0
+    if ruled.height:
+        # anchor date per (lot, class): the day the lot passes its class step
+        _seq = pl.col("sequence").cast(pl.Int64, strict=False)
+        anchors = pl.concat([
+            (allocation.filter(_seq == 2)
+             .group_by("lot_id").agg(pl.col("allocated_date").min().alias("_anchor"))
+             .with_columns(pl.lit("A").alias("_cls"))),
+            (allocation.filter(pl.col("process_id") == "M510N")
+             .group_by("lot_id").agg(pl.col("allocated_date").min().alias("_anchor"))
+             .with_columns(pl.lit("B").alias("_cls"))),
+            (allocation.filter(pl.col("process_id") == "M520N")
+             .group_by("lot_id").agg(pl.col("allocated_date").min().alias("_anchor"))
+             .with_columns(pl.lit("C").alias("_cls"))),
+        ], how="vertical")
+        # one row per lot×material: total qty, booked on the anchor date
+        tot = (ruled.group_by(["lot_id", "material_id", "_cls"])
+               .agg(pl.col("total_consumption").sum())
+               .join(anchors, on=["lot_id", "_cls"], how="left"))
+        kept = tot.filter(pl.col("_anchor").is_not_null())
+        missed = tot.filter(pl.col("_anchor").is_null())
+        n_retimed, n_zeroed = kept.height, missed.height
+        q_zeroed = float(missed["total_consumption"].sum() or 0)
+        if kept.height:
+            # template row carries the non-key columns; overwrite qty + date
+            tmpl = ruled.unique(subset=["lot_id", "material_id"], keep="first") \
+                        .drop(["allocated_date", "total_consumption"])
+            kept = (kept.rename({"_anchor": "allocated_date"})
+                    .join(tmpl, on=["lot_id", "material_id", "_cls"], how="left"))
+            parts.append(kept.select(out_cols))
+
+    out = pl.concat(parts, how="vertical")
+    n_cls = {k: int(cls.filter(pl.col("_cls") == k).height) for k in ("A", "B", "C", "D")}
+    print(f"   ✓ CopClass usage rule ACTIVE (SimStockMaster only): materials "
+          f"A={n_cls['A']:,} B={n_cls['B']:,} C={n_cls['C']:,} D={n_cls['D']:,}; "
+          f"{n_retimed:,} lot×material totals re-timed to anchor steps "
+          f"(A→SEQ2, B→M510N, C→M520N); {n_zeroed:,} zeroed "
+          f"({q_zeroed:,.0f} qty — anchor not in simulated route); "
+          f"D-class events dropped: {d_drop.height:,} ({float(d_drop['total_consumption'].sum() or 0):,.0f} qty)")
+    if sum(n_cls.values()) == 0:
+        print("   ⚠ CopClass rule matched NO materials — CopClass values are not "
+              "A/B/C/D; check DISTINCT CopClass in o_custom_Material")
+    return out
+
+
 def build_stock_master(cons_events, inventories, arrivals, allocation,
                        material_classes=None) -> pl.DataFrame:
     """SIM_StockMaster: DAILY PIVOT — one row per (material x date). Frontend spec
@@ -524,6 +619,11 @@ def build_stock_master(cons_events, inventories, arrivals, allocation,
             _run_id = allocation["allocation_run_id"][0]
         if "simulation_id" in allocation.columns:
             _sim_id = allocation["simulation_id"][0]
+
+    # CopClass 집계 기준 (gated): re-time A/B/C usage to anchor steps, drop D.
+    if (cons_events is not None and getattr(cons_events, "height", 0)
+            and _cop_usage_enabled()):
+        cons_events = _apply_cop_usage_rule(cons_events, material_classes, allocation)
 
     daily = []
     if cons_events is not None and getattr(cons_events, "height", 0):
