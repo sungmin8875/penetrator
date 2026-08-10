@@ -2413,6 +2413,18 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
             # that produced 0 rows simply contributes no rows for its allocation_run_id.
             print(f"   ⏭  skip {table_name} (0 rows this run — consumers filter by allocation_run_id)")
             continue
+        # The data-push Parquet validator rejects NESTED types, so polars List
+        # columns 400 every attempt (2026-08-10 root cause: SIM_et_jig_capacity_risk
+        # / SIM_demand_shortfall carry *_ids list columns and had failed on every
+        # run — deterministic, not transient). Flatten to comma-joined strings at
+        # this boundary so every current and future result table is covered (the
+        # reconciliation/material wrappers already flatten; this is the safety net).
+        _list_cols = [c for c, dt in df.schema.items() if isinstance(dt, pl.List)]
+        if _list_cols:
+            df = df.with_columns([
+                pl.col(c).cast(pl.List(pl.Utf8)).list.join(",").alias(c) for c in _list_cols])
+            print(f"   ✓ {table_name}: flattened list column(s) {_list_cols} to "
+                  "comma-joined strings (Data Pool push rejects nested Parquet types)")
         pdf = df.to_pandas()
 
         # ---- append path: table exists and no reset requested -> add this run's rows
