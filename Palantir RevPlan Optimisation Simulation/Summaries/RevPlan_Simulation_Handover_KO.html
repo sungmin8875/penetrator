@@ -269,152 +269,333 @@
   <p><b>push 동작:</b> 문자열 컬럼 폭은 최초 생성 시 실측×2(최소 256, 최대 4000)로 설정, 이후 append는 그 폭 안에서만. polars List 컬럼은 push 직전 쉼표 문자열로 자동 평탄화(중첩 Parquet 거부 대응). 일시적 400 오류는 1회 재시도. append 실패 시 테이블을 <b>절대 자동 drop하지 않음</b> — §3의 마이그레이션 절차를 따르세요.</p>
 
   <h3>5.1 컬럼 사전</h3>
-  <p>구분: <span class="pill src">원본</span> 소스 데이터 그대로(조인 포함) · <span class="pill calc">계산</span> 시뮬레이션/분석이 산출(산식 병기) · <span class="pill ok">스탬프</span> 실행 메타데이터. ID류 컬럼은 키 연결(concat)이므로 계산으로 분류. 모든 테이블 공통의 <code>simulation_id · simulation_name · revenue_plan_id · allocation_run_id · allocation_run_ts</code>(스탬프)는 각 표에서 생략합니다.</p>
+  <p>구분: <span class="pill src">원본</span> 소스 데이터 그대로(조인 포함) · <span class="pill calc">계산</span> 시뮬레이션/분석이 산출(산식 병기) · <span class="pill ok">스탬프</span> 실행 메타데이터(모든 테이블 공통 의미: <code>simulation_id</code> 실행의 시뮬레이션 ID(=dpInstanceId), <code>simulation_name</code> 시나리오명, <code>revenue_plan_id</code> 사용한 이동계획 리비전, <code>allocation_run_id</code> 실행 ID(run_tracker.run_id), <code>allocation_run_ts</code> 실행 시각 — 각 표에는 «공통 스탬프»로 표기).</p>
 
-  <details class="tbl"><summary>SIM_run_tracker <span class="grain">실행당 1행</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_run_tracker <span class="grain">실행당 1행 · 13컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">run_id</td><td><span class="pill ok">스탬프</span></td><td>실행 고유 ID — 다른 모든 테이블의 <code>allocation_run_id</code>가 이 값. 최신 실행 선택 기준은 <code>run_timestamp</code> 최대 행.</td></tr>
-    <tr><td class="k mono">run_timestamp</td><td><span class="pill ok">스탬프</span></td><td>실행 시각.</td></tr>
-    <tr><td class="k mono">config_hash</td><td><span class="pill calc">계산</span></td><td>설정 JSON의 해시 — 원본 Foundry의 «변경 없으면 스킵» 증분 판정용(MLWB에선 매 실행 수행).</td></tr>
-    <tr><td class="k mono">config_json</td><td><span class="pill calc">계산</span></td><td>이 실행의 전체 설정 스냅샷(JSON): 시작월·max_delay_days·버퍼·fast-track 한도·기본값·컬럼 매핑 — 결과 재현/비교의 근거.</td></tr>
-    <tr><td class="k mono">status · error_message</td><td><span class="pill calc">계산</span></td><td>SUCCESS / FAILED / SKIPPED + 실패 사유.</td></tr>
-    <tr><td class="k mono">allocation_rows · new_lots_rows · unrouted_rows · failed_rows</td><td><span class="pill calc">계산</span></td><td>이 실행이 산출한 각 테이블 행수(빠른 상태 점검용).</td></tr>
+    <tr><td class="k mono">simulation_id</td><td><span class="pill ok">스탬프</span></td><td>시뮬레이션 ID (= Action Flow의 dpInstanceId).</td></tr>
+    <tr><td class="k mono">revenue_plan_id</td><td><span class="pill ok">스탬프</span></td><td>실제 시뮬레이션한 이동계획 리비전.</td></tr>
+    <tr><td class="k mono">simulation_name</td><td><span class="pill ok">스탬프</span></td><td>시나리오명.</td></tr>
+    <tr><td class="k mono">config_hash</td><td><span class="pill calc">계산</span></td><td>config_json의 해시 — 원본 Foundry의 «변경 없으면 스킵» 증분 판정용.</td></tr>
+    <tr><td class="k mono">config_json</td><td><span class="pill calc">계산</span></td><td>실행 설정 전체 스냅샷(JSON): 시작월·max_delay_days·버퍼·fast-track 한도·기본값·컬럼 매핑.</td></tr>
+    <tr><td class="k mono">run_id</td><td><span class="pill ok">스탬프</span></td><td>실행 고유 ID — 다른 모든 테이블의 allocation_run_id가 이 값.</td></tr>
+    <tr><td class="k mono">run_timestamp</td><td><span class="pill ok">스탬프</span></td><td>실행 시각 — 최신 실행 선택 기준.</td></tr>
+    <tr><td class="k mono">status</td><td><span class="pill calc">계산</span></td><td>SUCCESS / FAILED / SKIPPED.</td></tr>
+    <tr><td class="k mono">error_message</td><td><span class="pill calc">계산</span></td><td>실패 시 오류 메시지(성공 시 null).</td></tr>
+    <tr><td class="k mono">allocation_rows</td><td><span class="pill calc">계산</span></td><td>이 실행의 SIM_allocation 행수.</td></tr>
+    <tr><td class="k mono">new_lots_rows</td><td><span class="pill calc">계산</span></td><td>SIM_new_lots_created 행수.</td></tr>
+    <tr><td class="k mono">unrouted_rows</td><td><span class="pill calc">계산</span></td><td>SIM_unrouted_model_demand 행수.</td></tr>
+    <tr><td class="k mono">failed_rows</td><td><span class="pill calc">계산</span></td><td>SIM_failed_allocations 행수.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_allocation <span class="grain">랏 × 스텝</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_allocation <span class="grain">랏 × 스텝 · 32컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">allocation_id</td><td><span class="pill calc">계산</span></td><td><code>simulation_id_lot_process_seq</code> 연결키.</td></tr>
-    <tr><td class="k mono">lot_id</td><td><span class="pill src">원본</span></td><td>재공 랏 = WipDaily LOTID 그대로. 가상 랏은 계산: <code>VL-{모델}-{목표월}-{해시}</code>.</td></tr>
-    <tr><td class="k mono">model_id · grouping_model</td><td><span class="pill src">원본</span></td><td>PRODID(=MODEL_NO) / 모델 마스터의 그루핑 모델(수요 충족은 그루핑 모델 단위로 상호 대체 가능).</td></tr>
-    <tr><td class="k mono">process_id · sequence · unit_process_name</td><td><span class="pill src">원본</span></td><td>라우팅의 OperationCode / WorkSeq / 공정명.</td></tr>
-    <tr><td class="k mono">equipment_group · modified_group</td><td><span class="pill src">원본</span></td><td>스텝의 설비그룹(라우팅 OP_MACHINE_CODE → ModifiedGroup). 화면 집계 축.</td></tr>
-    <tr><td class="k mono">equipment_id</td><td><span class="pill calc">계산</span></td><td>엔진이 <b>선택한</b> 설비(일자 탐색에서 자리를 준 호기). 외주 간주 스텝은 <code>OUTSOURCED</code>, 논리 공정은 통과 표기.</td></tr>
-    <tr><td class="k mono">allocated_date</td><td><span class="pill calc">계산</span></td><td>일자 전진 탐색이 용량 자리를 찾은 날(§4.5) — 이 시뮬레이션의 핵심 산출.</td></tr>
-    <tr><td class="k mono">target_month</td><td><span class="pill calc">계산</span></td><td>이 랏이 채우는 수요의 월. 긴급 랏은 ReceiptTargetDay의 월.</td></tr>
-    <tr><td class="k mono">actual_completion_month</td><td><span class="pill calc">계산</span></td><td>랏 <b>최종 스텝</b>의 allocated_date 월.</td></tr>
-    <tr><td class="k mono">is_delayed_completion</td><td><span class="pill calc">계산</span></td><td><code>actual_completion_month &gt; target_month</code> — 프론트 «지연 여부» 플래그의 원천.</td></tr>
-    <tr><td class="k mono">model_priority</td><td><span class="pill calc">계산</span></td><td>§4.2 target_step 임계비 랭크(1=최우선; 이월분 99999999).</td></tr>
+    <tr><td class="k mono">allocation_id</td><td><span class="pill calc">계산</span></td><td><code>{simulation_id}_{lot}_{process}_{seq}</code> 연결키.</td></tr>
+    <tr><td class="k mono">lot_id</td><td><span class="pill src">원본</span></td><td>재공 랏 = WipDaily LOTID. 가상 랏은 계산: <code>VL-{모델}-{목표월}-{해시}</code>.</td></tr>
+    <tr><td class="k mono">model_id</td><td><span class="pill src">원본</span></td><td>PRODID (= PPS MODEL_NO).</td></tr>
+    <tr><td class="k mono">process_id</td><td><span class="pill src">원본</span></td><td>라우팅 OperationCode (예: M717N).</td></tr>
+    <tr><td class="k mono">sequence</td><td><span class="pill src">원본</span></td><td>라우팅 WorkSeq — 같은 공정 다회 통과를 구분하는 축.</td></tr>
+    <tr><td class="k mono">equipment_group</td><td><span class="pill src">원본</span></td><td>스텝의 설비그룹.</td></tr>
+    <tr><td class="k mono">equipment_id</td><td><span class="pill calc">계산</span></td><td>엔진이 <b>선택한</b> 설비(자리를 준 호기). 외주 간주 = <code>OUTSOURCED</code>.</td></tr>
+    <tr><td class="k mono">allocated_date</td><td><span class="pill calc">계산</span></td><td>일자 전진 탐색이 용량 자리를 찾은 날(§4.5) — 핵심 산출.</td></tr>
+    <tr><td class="k mono">target_month</td><td><span class="pill calc">계산</span></td><td>이 랏이 채우는 수요의 월(긴급 랏은 ReceiptTargetDay의 월).</td></tr>
+    <tr><td class="k mono">actual_completion_month</td><td><span class="pill calc">계산</span></td><td>랏 최종 스텝 allocated_date의 월.</td></tr>
+    <tr><td class="k mono">is_delayed_completion</td><td><span class="pill calc">계산</span></td><td><code>actual_completion_month &gt; target_month</code> — 프론트 «지연 여부»의 원천.</td></tr>
+    <tr><td class="k mono">model_priority</td><td><span class="pill calc">계산</span></td><td>§4.2 target_step 임계비 랭크(1=최우선, 이월 99999999).</td></tr>
     <tr><td class="k mono">remaining_steps</td><td><span class="pill calc">계산</span></td><td>이 스텝 이후 남은 스텝 수.</td></tr>
-    <tr><td class="k mono">capacity_used_sheets</td><td><span class="pill calc">계산</span></td><td>이 스텝이 그날 설비에 적립한 SHT(외주/논리 공정 = 0).</td></tr>
-    <tr><td class="k mono">units_produced · final_production_units</td><td><span class="pill calc">계산</span></td><td>랏의 산출 EA — 최종 스텝 행에 기록(중간 스텝 null). 수율 미적용 원값(수율은 프론트 처리).</td></tr>
-    <tr><td class="k mono">total_revenue · total_margin</td><td><span class="pill calc">계산</span></td><td><code>units × 단가/마진단가</code> — 현재 단가 소스가 없어 null/0 (화면의 $0 표기 원인).</td></tr>
-    <tr><td class="k mono">delay_reasons</td><td><span class="pill calc">계산</span></td><td>스텝이 대기한 날들의 사유 요약(설비별; 스캔 메모 ON이면 만석일은 요약 1건).</td></tr>
+    <tr><td class="k mono">capacity_used_sheets</td><td><span class="pill calc">계산</span></td><td>이 스텝이 그날 설비에 적립한 SHT(외주·논리 공정 = 0).</td></tr>
+    <tr><td class="k mono">units_produced</td><td><span class="pill calc">계산</span></td><td>랏 산출 EA — 최종 스텝 행에 기록(중간 스텝 null). 수율 미적용(프론트 처리).</td></tr>
+    <tr><td class="k mono">final_production_units</td><td><span class="pill calc">계산</span></td><td>units_produced의 랏 전파본(재무·자재 계산의 곱셈 인자).</td></tr>
+    <tr><td class="k mono">delay_reasons</td><td><span class="pill calc">계산</span></td><td>대기일별 사유 요약(스캔 메모 ON이면 만석일 요약 1건).</td></tr>
     <tr><td class="k mono">is_new_lot</td><td><span class="pill calc">계산</span></td><td>가상 랏 여부(true = Phase 2 생성).</td></tr>
-    <tr><td class="k mono">model_customer_name · model_end_customer · model_sales_team</td><td><span class="pill src">원본</span></td><td>모델 마스터 조인(표시/집계용).</td></tr>
+    <tr><td class="k mono">model_customer_name</td><td><span class="pill src">원본</span></td><td>모델 마스터 조인 — 고객명.</td></tr>
+    <tr><td class="k mono">model_end_customer</td><td><span class="pill src">원본</span></td><td>모델 마스터 조인 — 최종 고객(집계 축).</td></tr>
+    <tr><td class="k mono">model_sales_team</td><td><span class="pill src">원본</span></td><td>모델 마스터 조인 — 영업팀.</td></tr>
+    <tr><td class="k mono">grouping_model</td><td><span class="pill src">원본</span></td><td>그루핑 모델 — 수요 충족은 이 단위로 상호 대체 가능.</td></tr>
+    <tr><td class="k mono">unit_process_name</td><td><span class="pill src">원본</span></td><td>라우팅 공정명.</td></tr>
+    <tr><td class="k mono">modified_group</td><td><span class="pill src">원본</span></td><td>라우팅 OP_MACHINE_CODE → ModifiedGroup(프론트 공정그룹 축).</td></tr>
+    <tr><td class="k mono">simulation_revenue_id</td><td><span class="pill calc">계산</span></td><td><code>{simulation_id}_{revenue_plan_id}</code> 연결키.</td></tr>
+    <tr><td class="k mono">total_revenue</td><td><span class="pill calc">계산</span></td><td><code>units × amount_per_unit</code> — 단가 소스 부재로 null/0.</td></tr>
+    <tr><td class="k mono">total_margin</td><td><span class="pill calc">계산</span></td><td><code>units × margin_per_unit</code> — 마진 소스 부재로 null/0.</td></tr>
+    <tr><td class="k mono">공통 스탬프 5종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id · allocation_run_id · allocation_run_ts.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_WIPMaster <span class="grain">랏 × 스텝 (= allocation 전체 + 아래 추가 컬럼)</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_WIPMaster <span class="grain">랏 × 스텝 · SIM_allocation 32컬럼 전체 + 아래 11컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">actual_first_start</td><td><span class="pill calc">계산</span></td><td>WipHistory에서 그 랏의 <b>최초 착공 시각</b>(90일 윈도우 내 최소 WIPDTTM_ST). 랏 단위 — 모든 스텝 행에 동일.</td></tr>
-    <tr><td class="k mono">actual_last_event · actual_steps_done</td><td><span class="pill calc">계산</span></td><td>최종 실적 이벤트 시각 / 실적 이벤트 수. 실적 없는 랏(VL 포함)은 null.</td></tr>
-    <tr><td class="k mono">actual_last_process · actual_last_equipment</td><td><span class="pill src">원본</span></td><td>최종 이벤트의 공정(사이트 접두 PK1 제거) / 설비(EQPTID).</td></tr>
-    <tr><td class="k mono">actual_sheet_qty · actual_pnl_qty · actual_unit_qty</td><td><span class="pill src">원본</span></td><td>최종 이벤트 시점의 실측 SHT/PNL/EA (WIP*QTY_ED).</td></tr>
-    <tr><td class="k mono">aps_prodcategory</td><td><span class="pill src">원본</span></td><td>MES/APS 제품 카테고리(양산/시재 판별은 프론트에서 그루핑 모델 기준 처리).</td></tr>
-    <tr><td class="k mono">chasu · gubun</td><td><span class="pill src">원본</span></td><td>라우팅 (모델,공정,WorkSeq) 조인의 차수 / 공정구분(투입·외층·SR …). 같은 공정 다회 통과 구분용.</td></tr>
+    <tr><td class="k mono">(SIM_allocation 전 컬럼)</td><td>—</td><td>위 SIM_allocation 표와 동일 — 생략이 아니라 참조.</td></tr>
+    <tr><td class="k mono">actual_first_start</td><td><span class="pill calc">계산</span></td><td>WipHistory 90일 내 그 랏의 최초 착공 시각(min WIPDTTM_ST). 랏 단위 — 전 스텝 행 동일.</td></tr>
+    <tr><td class="k mono">actual_last_event</td><td><span class="pill calc">계산</span></td><td>최종 실적 이벤트 시각(max). 실적 없는 랏(VL 포함) null.</td></tr>
+    <tr><td class="k mono">actual_steps_done</td><td><span class="pill calc">계산</span></td><td>실적 이벤트 수(이력상 진행 스텝 수의 근사).</td></tr>
+    <tr><td class="k mono">actual_last_process</td><td><span class="pill src">원본</span></td><td>최종 이벤트의 공정 — 사이트 접두 제거(PK1ML20N→ML20N).</td></tr>
+    <tr><td class="k mono">actual_last_equipment</td><td><span class="pill src">원본</span></td><td>최종 이벤트의 설비(EQPTID).</td></tr>
+    <tr><td class="k mono">actual_sheet_qty</td><td><span class="pill src">원본</span></td><td>최종 이벤트 시점 실측 SHT(WIPSHEETQTY_ED).</td></tr>
+    <tr><td class="k mono">actual_pnl_qty</td><td><span class="pill src">원본</span></td><td>최종 이벤트 시점 실측 PNL(WIPPNLQTY_ED).</td></tr>
+    <tr><td class="k mono">actual_unit_qty</td><td><span class="pill src">원본</span></td><td>최종 이벤트 시점 실측 EA(WIPQTY_ED).</td></tr>
+    <tr><td class="k mono">aps_prodcategory</td><td><span class="pill src">원본</span></td><td>MES/APS 제품 카테고리(양산/시재 판별은 프론트 처리).</td></tr>
+    <tr><td class="k mono">chasu</td><td><span class="pill src">원본</span></td><td>라우팅 (모델,공정,WorkSeq) 조인의 차수.</td></tr>
+    <tr><td class="k mono">gubun</td><td><span class="pill src">원본</span></td><td>라우팅 공정구분(투입·외층·SR …).</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_StockMaster <span class="grain">자재 × 일자</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_StockMaster <span class="grain">자재 × 일자 · 10컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">material_id · stock_date</td><td><span class="pill src">원본</span>/<span class="pill calc">계산</span></td><td>자재 코드 / 활동 발생일. 자재별 첫 활동일 −1일에 앵커 행(사용·보충 0, 차트 시작점).</td></tr>
-    <tr><td class="k mono">usage_qty</td><td><span class="pill calc">계산</span></td><td>그날 소요 합 = Σ(BOM ReqQty × 생산 EA), CopClass 규칙 적용 시 A→SEQ2·B→M510N·C→M520N 통과일에 계상, D 제외, 앵커 없으면 0 (§3 <code>cop_usage</code>).</td></tr>
+    <tr><td class="k mono">material_id</td><td><span class="pill src">원본</span></td><td>자재 코드(BOM MaterialNo 키공간).</td></tr>
+    <tr><td class="k mono">stock_date</td><td><span class="pill calc">계산</span></td><td>활동(사용/보충) 발생일. 자재별 첫 활동일 −1일에 앵커 행(사용·보충 0).</td></tr>
+    <tr><td class="k mono">usage_qty</td><td><span class="pill calc">계산</span></td><td>그날 소요 합 = Σ(BOM ReqQty × 생산 EA). CopClass 규칙 적용 시 A→SEQ2·B→M510N·C→M520N 통과일 계상, D 제외, 앵커 없으면 0.</td></tr>
     <tr><td class="k mono">replenish_qty</td><td><span class="pill calc">계산</span></td><td>그날 PO 입고 계획 합(PoArrivePlan 최신 배치) — 구매 추정치.</td></tr>
-    <tr><td class="k mono">initial_onhand_qty</td><td><span class="pill src">원본</span></td><td>시뮬레이션 시작 시점 OnHand 스냅샷(자재별 <b>상수</b> — 일별 시가 아님).</td></tr>
     <tr><td class="k mono">balance_qty</td><td><span class="pill calc">계산</span></td><td><code>initial_onhand_qty + 누적 replenish − 누적 usage</code> (일말 잔고).</td></tr>
-    <tr><td class="k mono">balance_qty_wo_arrivals</td><td><span class="pill calc">계산</span></td><td>위와 동일하되 입고 제외 — balance_qty와의 차 = PO 입고 리스크.</td></tr>
-    <tr><td class="k mono">cop_class</td><td><span class="pill src">원본</span></td><td>자재 등급(o_custom_Material.CopClass).</td></tr>
+    <tr><td class="k mono">balance_qty_wo_arrivals</td><td><span class="pill calc">계산</span></td><td>입고 제외 잔고 — balance_qty와의 차 = PO 입고 리스크.</td></tr>
+    <tr><td class="k mono">initial_onhand_qty</td><td><span class="pill src">원본</span></td><td>시뮬레이션 시작 시점 OnHand 스냅샷 — 자재별 <b>상수</b>(일별 시가 아님).</td></tr>
+    <tr><td class="k mono">cop_class</td><td><span class="pill src">원본</span></td><td>자재 등급(Material.CopClass: A/B/C/D).</td></tr>
+    <tr><td class="k mono">simulation_id · allocation_run_id</td><td><span class="pill ok">스탬프</span></td><td>공통 스탬프(이 테이블은 2종만).</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_failed_allocations <span class="grain">랏 × 실패 스텝</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_failed_allocations <span class="grain">랏 × 실패 스텝 · 21컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
     <tr><td class="k mono">failed_allocation_id</td><td><span class="pill calc">계산</span></td><td>연결키.</td></tr>
-    <tr><td class="k mono">lot_id · model_id · process_id · sequence · equipment_group</td><td><span class="pill src">원본</span></td><td>실패가 발생한 스텝의 식별자(랏 전체가 실패 처리됨 — 부분 진행 없음).</td></tr>
-    <tr><td class="k mono">failure_status</td><td><span class="pill calc">계산</span></td><td><code>FAILED_INSUFFICIENT_CAPACITY</code>(max_delay_days 내 자리 없음) / <code>FAILED_HORIZON_EXCEEDED</code>(지평선 초과) / <code>FAILED_NO_EQUIPMENT</code>(외주 토글 OFF일 때만).</td></tr>
-    <tr><td class="k mono">failure_reason · delay_details</td><td><span class="pill calc">계산</span></td><td>사람이 읽는 사유 + 대기 내역 상세.</td></tr>
+    <tr><td class="k mono">lot_id</td><td><span class="pill src">원본</span></td><td>실패한 랏(랏 전체 실패 — 부분 진행 없음).</td></tr>
+    <tr><td class="k mono">model_id</td><td><span class="pill src">원본</span></td><td>모델.</td></tr>
+    <tr><td class="k mono">process_id</td><td><span class="pill src">원본</span></td><td>막힌 공정(OperationCode) — 병목 식별 축.</td></tr>
+    <tr><td class="k mono">sequence</td><td><span class="pill src">원본</span></td><td>막힌 스텝의 WorkSeq.</td></tr>
+    <tr><td class="k mono">equipment_group</td><td><span class="pill src">원본</span></td><td>막힌 스텝의 설비그룹.</td></tr>
+    <tr><td class="k mono">target_month</td><td><span class="pill calc">계산</span></td><td>채우려던 수요의 월.</td></tr>
+    <tr><td class="k mono">model_priority</td><td><span class="pill calc">계산</span></td><td>실패 시점 우선순위.</td></tr>
+    <tr><td class="k mono">remaining_steps</td><td><span class="pill calc">계산</span></td><td>실패 스텝 이후 남았던 스텝 수.</td></tr>
+    <tr><td class="k mono">capacity_needed_sheets</td><td><span class="pill calc">계산</span></td><td>스텝이 요구한 SHT.</td></tr>
+    <tr><td class="k mono">units_in_lot</td><td><span class="pill calc">계산</span></td><td>랏 EA(쇼티지 기여량).</td></tr>
     <tr><td class="k mono">days_searched</td><td><span class="pill calc">계산</span></td><td>실패 확정까지 탐색한 일수(≤ max_delay_days).</td></tr>
-    <tr><td class="k mono">capacity_needed_sheets · units_in_lot · remaining_steps · model_priority · target_month · is_new_lot</td><td><span class="pill calc">계산</span></td><td>실패 시점의 스텝 SHT 수요·랏 EA·잔여 스텝·우선순위·목표월·VL 여부.</td></tr>
+    <tr><td class="k mono">failure_reason</td><td><span class="pill calc">계산</span></td><td>사람이 읽는 사유 문장.</td></tr>
+    <tr><td class="k mono">failure_status</td><td><span class="pill calc">계산</span></td><td>FAILED_INSUFFICIENT_CAPACITY(기한 내 자리 없음) / FAILED_HORIZON_EXCEEDED(지평선 초과) / FAILED_NO_EQUIPMENT(외주 토글 OFF일 때만).</td></tr>
+    <tr><td class="k mono">delay_details</td><td><span class="pill calc">계산</span></td><td>대기 내역 상세(설비별).</td></tr>
+    <tr><td class="k mono">is_new_lot</td><td><span class="pill calc">계산</span></td><td>가상 랏 여부.</td></tr>
+    <tr><td class="k mono">공통 스탬프 5종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id · allocation_run_id · allocation_run_ts.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_new_lots_created <span class="grain">가상 랏당 1행</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_new_lots_created <span class="grain">가상 랏당 1행 · 11컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">lot_id · model_id · target_month</td><td><span class="pill calc">계산</span></td><td>VL ID·모델·충족 대상 월.</td></tr>
-    <tr><td class="k mono">target_panels · target_units</td><td><span class="pill calc">계산</span></td><td>부족분을 LotSize(EA→SHT 환산) 단위로 분할한 이 VL의 목표 PNL/EA.</td></tr>
-    <tr><td class="k mono">target_lot_start_date</td><td><span class="pill calc">계산</span></td><td>목표 완료월 − 리드타임 역산 + 그루핑 모델별 착수율 스로틀.</td></tr>
-    <tr><td class="k mono">lead_time_days</td><td><span class="pill calc">계산</span></td><td>모델 리드타임(라우팅 Σ PlanLt, 시간→일).</td></tr>
+    <tr><td class="k mono">lot_id</td><td><span class="pill calc">계산</span></td><td><code>VL-{모델}-{목표월}-{해시}</code>.</td></tr>
+    <tr><td class="k mono">model_id</td><td><span class="pill src">원본</span></td><td>모델.</td></tr>
+    <tr><td class="k mono">target_month</td><td><span class="pill calc">계산</span></td><td>충족 대상 월.</td></tr>
+    <tr><td class="k mono">target_panels</td><td><span class="pill calc">계산</span></td><td>부족 EA → PNL 환산 후 LotSize 단위 분할된 이 VL의 목표 PNL.</td></tr>
+    <tr><td class="k mono">target_units</td><td><span class="pill calc">계산</span></td><td>이 VL의 목표 EA.</td></tr>
+    <tr><td class="k mono">target_lot_start_date</td><td><span class="pill calc">계산</span></td><td>목표 완료월 − lead_time_days 역산 + 그루핑 모델별 착수율 스로틀.</td></tr>
+    <tr><td class="k mono">lead_time_days</td><td><span class="pill calc">계산</span></td><td>모델 리드타임 = 라우팅 Σ PlanLt(시간→일).</td></tr>
+    <tr><td class="k mono">공통 스탬프 4종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · revenue_plan_id · allocation_run_id · allocation_run_ts.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_monthly_fulfillment_wide / _long <span class="grain">모델 × 월</span></summary><div class="tablewrap"><table>
-    <tr><th>컬럼(패밀리)</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">planned_demand_*</td><td><span class="pill src">원본</span></td><td>이동계획 수요(EA; _krw/_margin_krw = ×단가 — 단가 없어 0).</td></tr>
-    <tr><td class="k mono">net_production_demand_*</td><td><span class="pill calc">계산</span></td><td>§4.1 순수요.</td></tr>
-    <tr><td class="k mono">inventory_consumed_*</td><td><span class="pill calc">계산</span></td><td>재고(출하+보유+이동중)로 상쇄된 수요.</td></tr>
-    <tr><td class="k mono">wip_produced_* · new_lots_produced_* · total_produced_*</td><td><span class="pill calc">계산</span></td><td>재공 랏 / 가상 랏 생산 EA(units_produced 합) / 둘의 합.</td></tr>
-    <tr><td class="k mono">production_and_inventory_*</td><td><span class="pill calc">계산</span></td><td><code>total_produced + inventory_consumed</code> — «공급» 총량.</td></tr>
-    <tr><td class="k mono">impossible_to_simulate_*</td><td><span class="pill calc">계산</span></td><td>쇼티지 분석의 실패 EA + 라우팅 없는 수요 — 시뮬레이션이 시도조차 못 한 몫.</td></tr>
-    <tr><td class="k mono">shortfall_*</td><td><span class="pill calc">계산</span></td><td><code>planned_demand − production_and_inventory − impossible_to_simulate</code>.</td></tr>
-    <tr><td class="k mono">sheets_produced 등 파생</td><td><span class="pill calc">계산</span></td><td>EA ÷ units_per_sheet 환산.</td></tr>
-    <tr><td class="k mono">(_long)</td><td><span class="pill calc">계산</span></td><td>wide를 지표당 1행으로 melt: 3레벨 카테고리(demand | fulfilled(inventory/produced(wip/new_lots)) | shortfall | adjustment) + 값 — 차트용.</td></tr>
-  </table></div></details>
-
-  <details class="tbl"><summary>SIM_equipment_capacity_shortages / SIM_lot_waiting_periods <span class="grain">설비그룹×연속구간 / 랏×대기</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_monthly_fulfillment_wide <span class="grain">모델 × 월 · 38컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">shortage_start/end_date · shortage_duration_days</td><td><span class="pill calc">계산</span></td><td>같은 설비그룹의 DelayRecord가 연속된 날짜 구간으로 병합된 결과.</td></tr>
-    <tr><td class="k mono">deferred_lots_count · failed_lots_count · total_delay_days · total_units_deferred</td><td><span class="pill calc">계산</span></td><td>구간 내 지연/실패 랏 수·지연일 합·영향 EA.</td></tr>
-    <tr><td class="k mono">waiting_start/end_date · waiting_days</td><td><span class="pill calc">계산</span></td><td>랏이 한 공정 앞에서 기다린 기간(실패 랏은 max_delay_days까지).</td></tr>
-    <tr><td class="k mono">is_failed_allocation · failure_status · blocked_equipment_list/count · delay_reasons_summary</td><td><span class="pill calc">계산</span></td><td>대기의 결말(할당됨/실패)과 원인 설비 목록.</td></tr>
-    <tr><td class="k mono">revenue/margin_at_risk</td><td><span class="pill calc">계산</span></td><td>영향 EA × 단가 — 단가 소스 없어 0.</td></tr>
+    <tr><td class="k mono">fulfillment_stat_id</td><td><span class="pill calc">계산</span></td><td><code>{sim}_{revision}_{model}_{month}</code> 연결키.</td></tr>
+    <tr><td class="k mono">month_date · month_str</td><td><span class="pill calc">계산</span></td><td>대상 월(날짜형 1일 / 'YYYYMM' 문자형).</td></tr>
+    <tr><td class="k mono">model_id · grouping_model</td><td><span class="pill src">원본</span></td><td>모델 / 그루핑 모델.</td></tr>
+    <tr><td class="k mono">model_end_customer · model_customer_name · model_sales_team</td><td><span class="pill src">원본</span></td><td>모델 마스터 조인(집계 축).</td></tr>
+    <tr><td class="k mono">planned_demand_ea</td><td><span class="pill src">원본</span></td><td>이동계획 수요 EA.</td></tr>
+    <tr><td class="k mono">planned_demand_krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td>EA × 단가/마진단가 — 단가 부재로 0. (이하 모든 _krw/_margin_krw 동일.)</td></tr>
+    <tr><td class="k mono">net_production_demand_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td>§4.1 순수요(수요 − 재고 상쇄, forward rolling).</td></tr>
+    <tr><td class="k mono">inventory_consumed_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td>재고(출하+보유+이동중)로 상쇄된 수요.</td></tr>
+    <tr><td class="k mono">wip_produced_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td>재공 랏 생산 EA = Σ units_produced (is_new_lot=false).</td></tr>
+    <tr><td class="k mono">new_lots_produced_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td>가상 랏 생산 EA (is_new_lot=true).</td></tr>
+    <tr><td class="k mono">total_produced_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td><code>wip_produced + new_lots_produced</code>.</td></tr>
+    <tr><td class="k mono">production_and_inventory_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td><code>total_produced + inventory_consumed</code> — «공급» 총량.</td></tr>
+    <tr><td class="k mono">impossible_to_simulate_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td>쇼티지 분석의 실패 EA + 라우팅 없는 수요 — 시도조차 불가한 몫.</td></tr>
+    <tr><td class="k mono">shortfall_ea / _krw / _margin_krw</td><td><span class="pill calc">계산</span></td><td><code>planned_demand − production_and_inventory − impossible_to_simulate</code>.</td></tr>
+    <tr><td class="k mono">sheets_produced</td><td><span class="pill calc">계산</span></td><td>total_produced_ea ÷ units_per_sheet.</td></tr>
+    <tr><td class="k mono">sheets_production_and_inventory</td><td><span class="pill calc">계산</span></td><td>production_and_inventory_ea ÷ units_per_sheet.</td></tr>
+    <tr><td class="k mono">sheets_impossible_to_simulate</td><td><span class="pill calc">계산</span></td><td>impossible_to_simulate_ea ÷ units_per_sheet.</td></tr>
+    <tr><td class="k mono">공통 스탬프</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_et_jig_capacity_risk <span class="grain">모델 × 월</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_monthly_fulfillment_long <span class="grain">모델 × 월 × 카테고리 · 17컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">lots_at_risk · units_at_risk · risk_percentage · average/max_days_late</td><td><span class="pill calc">계산</span></td><td>목표월 말일을 넘겨 완료되는 랏 집계와 지각 일수.</td></tr>
-    <tr><td class="k mono">current_et_jig_count · current_daily/monthly_lot_capacity</td><td><span class="pill src">원본</span>/<span class="pill calc">계산</span></td><td>JIG 마스터 수량 / <code>일 랏 용량(JigCapa÷JigQty) × 30</code>.</td></tr>
-    <tr><td class="k mono">additional_et_jigs_needed · total_et_jigs_needed · capacity_increase_pct · earliest_jig_needed_date</td><td><span class="pill calc">계산</span></td><td>지각 랏을 기한 내 소화하는 데 필요한 추가 JIG 수와 필요 시점 역산.</td></tr>
-    <tr><td class="k mono">required_start_date · actual_earliest_start · start_date_gap_days</td><td><span class="pill calc">계산</span></td><td>정시 완료에 필요한 착수일 vs 실제 착수일.</td></tr>
-    <tr><td class="k mono">risk_level · risk_reason · mitigation_strategy · jig_procurement_warning</td><td><span class="pill calc">계산</span></td><td>HIGH/MEDIUM/LOW/NO_RISK 판정 + 설명·완화안 텍스트.</td></tr>
-    <tr><td class="k mono">optimal_stagger_days · lots_per_stagger_group · stagger_groups_needed</td><td><span class="pill calc">계산</span></td><td>랏 착수 분산(스태거) 권고안.</td></tr>
-    <tr><td class="k mono">at_risk_lot_ids · related_shortage_ids</td><td><span class="pill calc">계산</span></td><td>관련 랏/부족구간 ID — push 시 쉼표 문자열로 평탄화됨.</td></tr>
+    <tr><td class="k mono">fulfillment_stat_category_id</td><td><span class="pill calc">계산</span></td><td>wide 키 + 카테고리 연결키.</td></tr>
+    <tr><td class="k mono">month_date · month_str · model_id · grouping_model · model_end_customer · model_customer_name · model_sales_team</td><td>위와 동일</td><td>wide와 같은 차원 컬럼.</td></tr>
+    <tr><td class="k mono">category_l1</td><td><span class="pill calc">계산</span></td><td>demand | fulfilled | shortfall | adjustment.</td></tr>
+    <tr><td class="k mono">category_l2</td><td><span class="pill calc">계산</span></td><td>fulfilled의 하위: inventory | produced; shortfall의 하위: simulation_failure; 그 외 'null'.</td></tr>
+    <tr><td class="k mono">category_l3</td><td><span class="pill calc">계산</span></td><td>produced의 하위: wip | new_lots; 그 외 'null'.</td></tr>
+    <tr><td class="k mono">amount_ea</td><td><span class="pill calc">계산</span></td><td>해당 카테고리의 EA 값(wide의 해당 지표를 melt).</td></tr>
+    <tr><td class="k mono">amount_margin_krw</td><td><span class="pill calc">계산</span></td><td>해당 카테고리의 마진 KRW(단가 부재로 0).</td></tr>
+    <tr><td class="k mono">amount_sheets</td><td><span class="pill calc">계산</span></td><td>해당 카테고리의 SHT 환산값.</td></tr>
+    <tr><td class="k mono">공통 스탬프</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_material_consumption_events <span class="grain">랏 × 스텝 × 자재</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_equipment_capacity_shortages <span class="grain">설비그룹 × 연속 구간 · 15컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">allocation_id · lot_id · model_id · process_id · sequence · equipment_id · allocated_date</td><td><span class="pill src">원본</span></td><td>할당 스텝 식별자(자재↔랏 브리지의 키). <b>BOM 스텝 타이밍 유지</b> — CopClass 재배치는 StockMaster에만 적용.</td></tr>
-    <tr><td class="k mono">material_id · uom · required_quantity · chasu</td><td><span class="pill src">원본</span></td><td>BOM 조인: 자재·단위·EA당 소요량·차수(라벨 — 재고 차감은 자재 총량 1회).</td></tr>
+    <tr><td class="k mono">shortage_id</td><td><span class="pill calc">계산</span></td><td>연결키.</td></tr>
+    <tr><td class="k mono">equipment_group</td><td><span class="pill src">원본</span></td><td>부족이 발생한 설비그룹.</td></tr>
+    <tr><td class="k mono">shortage_start_date · shortage_end_date</td><td><span class="pill calc">계산</span></td><td>DelayRecord가 연속된 날짜 구간의 시작/끝.</td></tr>
+    <tr><td class="k mono">shortage_duration_days</td><td><span class="pill calc">계산</span></td><td>구간 길이(일).</td></tr>
+    <tr><td class="k mono">total_delay_days</td><td><span class="pill calc">계산</span></td><td>구간 내 모든 랏의 지연일 합.</td></tr>
+    <tr><td class="k mono">deferred_lots_count</td><td><span class="pill calc">계산</span></td><td>지연 후 결국 할당된 랏 수.</td></tr>
+    <tr><td class="k mono">failed_lots_count</td><td><span class="pill calc">계산</span></td><td>구간 내 실패 랏 수.</td></tr>
+    <tr><td class="k mono">total_units_deferred</td><td><span class="pill calc">계산</span></td><td>영향 EA.</td></tr>
+    <tr><td class="k mono">total_revenue_at_risk · total_margin_at_risk</td><td><span class="pill calc">계산</span></td><td>영향 EA × 단가 — 단가 부재로 0.</td></tr>
+    <tr><td class="k mono">공통 스탬프 4종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · allocation_run_id · allocation_run_ts.</td></tr>
+  </table></div></details>
+
+  <details class="tbl"><summary>SIM_lot_waiting_periods <span class="grain">랏 × 대기 · 24컬럼</span></summary><div class="tablewrap"><table>
+    <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
+    <tr><td class="k mono">waiting_period_id</td><td><span class="pill calc">계산</span></td><td>연결키.</td></tr>
+    <tr><td class="k mono">lot_id · model_id · process_id · equipment_group</td><td><span class="pill src">원본</span></td><td>기다린 랏과 막힌 공정/설비그룹.</td></tr>
+    <tr><td class="k mono">sales_team</td><td><span class="pill src">원본</span></td><td>모델 마스터 조인.</td></tr>
+    <tr><td class="k mono">model_priority</td><td><span class="pill calc">계산</span></td><td>우선순위(랭크).</td></tr>
+    <tr><td class="k mono">waiting_start_date · waiting_end_date</td><td><span class="pill calc">계산</span></td><td>대기 시작(자리 탐색 개시일)/종료(할당일 또는 포기일).</td></tr>
+    <tr><td class="k mono">waiting_days</td><td><span class="pill calc">계산</span></td><td>대기 일수(실패 랏은 max_delay_days까지).</td></tr>
+    <tr><td class="k mono">is_failed_allocation</td><td><span class="pill calc">계산</span></td><td>대기의 결말: true=실패, false=지연 후 할당.</td></tr>
+    <tr><td class="k mono">failure_status · failure_detail</td><td><span class="pill calc">계산</span></td><td>실패 시 상태 코드와 상세.</td></tr>
+    <tr><td class="k mono">blocked_equipment_list · blocked_equipment_count</td><td><span class="pill calc">계산</span></td><td>기간 중 만석/차단이던 설비 목록·수.</td></tr>
+    <tr><td class="k mono">delay_reasons_summary</td><td><span class="pill calc">계산</span></td><td>일별 사유 요약.</td></tr>
+    <tr><td class="k mono">units_affected</td><td><span class="pill calc">계산</span></td><td>랏 EA.</td></tr>
+    <tr><td class="k mono">revenue_at_risk · margin_at_risk</td><td><span class="pill calc">계산</span></td><td>EA × 단가 — 단가 부재로 0.</td></tr>
+    <tr><td class="k mono">공통 스탬프 5종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id · allocation_run_id · allocation_run_ts.</td></tr>
+  </table></div></details>
+
+  <details class="tbl"><summary>SIM_et_jig_capacity_risk <span class="grain">모델 × 월 · 46컬럼</span></summary><div class="tablewrap"><table>
+    <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
+    <tr><td class="k mono">et_jig_risk_id</td><td><span class="pill calc">계산</span></td><td><code>{sim}_{model}_{month}</code> 연결키.</td></tr>
+    <tr><td class="k mono">title</td><td><span class="pill calc">계산</span></td><td>화면 표시용 제목 문장.</td></tr>
+    <tr><td class="k mono">model_id · grouping_model · model_sales_team · model_customer_name · model_end_customer</td><td><span class="pill src">원본</span></td><td>모델·마스터 조인 차원.</td></tr>
+    <tr><td class="k mono">model_priority</td><td><span class="pill calc">계산</span></td><td>우선순위 랭크.</td></tr>
+    <tr><td class="k mono">target_month · target_month_end_date</td><td><span class="pill calc">계산</span></td><td>대상 월과 월말일(지각 판정 기준선).</td></tr>
+    <tr><td class="k mono">demand_qty_units</td><td><span class="pill src">원본</span></td><td>그 모델·월의 수요 EA.</td></tr>
+    <tr><td class="k mono">total_lots_created · total_units_in_lots</td><td><span class="pill calc">계산</span></td><td>그 수요에 만든 랏 수·EA 합.</td></tr>
+    <tr><td class="k mono">lots_at_risk · units_at_risk</td><td><span class="pill calc">계산</span></td><td>목표월 말일 이후 완료되는 랏 수·EA.</td></tr>
+    <tr><td class="k mono">risk_percentage</td><td><span class="pill calc">계산</span></td><td>units_at_risk ÷ 수요.</td></tr>
+    <tr><td class="k mono">average_days_late · max_days_late</td><td><span class="pill calc">계산</span></td><td>월말 초과 일수의 평균/최대.</td></tr>
+    <tr><td class="k mono">current_et_jig_count</td><td><span class="pill src">원본</span></td><td>JIG 마스터의 현재 JIG 수.</td></tr>
+    <tr><td class="k mono">current_daily_lot_capacity</td><td><span class="pill calc">계산</span></td><td>JigCapa ÷ JigQty (랏/일).</td></tr>
+    <tr><td class="k mono">current_monthly_lot_capacity</td><td><span class="pill calc">계산</span></td><td>일 용량 × 30.</td></tr>
+    <tr><td class="k mono">required_start_date · actual_earliest_start · start_date_gap_days</td><td><span class="pill calc">계산</span></td><td>정시 완료에 필요한 착수일 vs 실제 최조기 착수일과 그 차.</td></tr>
+    <tr><td class="k mono">additional_et_jigs_needed · total_et_jigs_needed</td><td><span class="pill calc">계산</span></td><td>지각 랏을 기한 내 소화할 추가/총 JIG 수 역산.</td></tr>
+    <tr><td class="k mono">capacity_increase_pct</td><td><span class="pill calc">계산</span></td><td>additional ÷ current (%).</td></tr>
+    <tr><td class="k mono">earliest_jig_needed_date · jig_procurement_warning</td><td><span class="pill calc">계산</span></td><td>JIG 필요 시점; 과거 시점이면 경고 문구.</td></tr>
+    <tr><td class="k mono">revenue_at_risk · margin_at_risk · amount_per_unit · margin_per_unit</td><td><span class="pill calc">계산</span></td><td>재무 임팩트 — 단가 부재로 0/null.</td></tr>
+    <tr><td class="k mono">earliest_lot_start · latest_lot_start</td><td><span class="pill calc">계산</span></td><td>관련 랏 착수일 범위.</td></tr>
+    <tr><td class="k mono">risk_level</td><td><span class="pill calc">계산</span></td><td>HIGH / MEDIUM / LOW / NO_RISK.</td></tr>
+    <tr><td class="k mono">risk_reason · mitigation_strategy</td><td><span class="pill calc">계산</span></td><td>판정 근거·완화안 텍스트.</td></tr>
+    <tr><td class="k mono">optimal_stagger_days · lots_per_stagger_group · stagger_groups_needed</td><td><span class="pill calc">계산</span></td><td>랏 착수 분산(스태거) 권고.</td></tr>
+    <tr><td class="k mono">at_risk_lot_ids · related_shortage_ids</td><td><span class="pill calc">계산</span></td><td>관련 랏/부족구간 ID — 쉼표 문자열로 평탄화됨.</td></tr>
+    <tr><td class="k mono">analysis_run_date</td><td><span class="pill ok">스탬프</span></td><td>분석 실행일.</td></tr>
+    <tr><td class="k mono">공통 스탬프 5종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id · allocation_run_id · allocation_run_ts.</td></tr>
+  </table></div></details>
+
+  <details class="tbl"><summary>SIM_material_consumption_events <span class="grain">랏 × 스텝 × 자재 · 23컬럼</span></summary><div class="tablewrap"><table>
+    <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
+    <tr><td class="k mono">consumption_event_id</td><td><span class="pill calc">계산</span></td><td>연결키.</td></tr>
+    <tr><td class="k mono">allocation_id</td><td><span class="pill calc">계산</span></td><td>원 할당 스텝으로의 역링크.</td></tr>
+    <tr><td class="k mono">lot_id · model_id · process_id · sequence · equipment_id</td><td><span class="pill src">원본</span></td><td>소비가 발생한 할당 스텝 식별자 — 자재↔랏 브리지의 키.</td></tr>
+    <tr><td class="k mono">allocated_date</td><td><span class="pill calc">계산</span></td><td>스텝 배정일 = 소비 계상일. <b>BOM 스텝 타이밍 유지</b>(CopClass 재배치는 StockMaster에만).</td></tr>
+    <tr><td class="k mono">material_id · uom</td><td><span class="pill src">원본</span></td><td>자재 코드·단위(자재 마스터 조인).</td></tr>
+    <tr><td class="k mono">required_quantity</td><td><span class="pill src">원본</span></td><td>BOM ReqQty — EA당 소요량.</td></tr>
+    <tr><td class="k mono">final_production_units</td><td><span class="pill calc">계산</span></td><td>랏 산출 EA(곱셈 인자).</td></tr>
     <tr><td class="k mono">total_consumption</td><td><span class="pill calc">계산</span></td><td><code>required_quantity × final_production_units</code>.</td></tr>
-    <tr><td class="k mono">cumulative_arrivals · running_inventory_before/after(_with_arrivals)</td><td><span class="pill calc">계산</span></td><td>자재별 시간순 누적 입고와 롤링 잔고(입고 포함/제외 2계열).</td></tr>
-    <tr><td class="k mono">is_shortage(_with_arrivals)</td><td><span class="pill calc">계산</span></td><td>해당 이벤트 시점 잔고 &lt; 0 여부.</td></tr>
+    <tr><td class="k mono">chasu</td><td><span class="pill src">원본</span></td><td>BOM 차수 라벨(재고 차감은 자재 총량 1회 — 이중 차감 없음).</td></tr>
+    <tr><td class="k mono">cumulative_arrivals</td><td><span class="pill calc">계산</span></td><td>그 시점까지의 누적 PO 입고.</td></tr>
+    <tr><td class="k mono">running_inventory_before / _after</td><td><span class="pill calc">계산</span></td><td>입고 <b>제외</b> 롤링 잔고(이벤트 직전/직후).</td></tr>
+    <tr><td class="k mono">running_inventory_before_with_arrivals / _after_with_arrivals</td><td><span class="pill calc">계산</span></td><td>입고 <b>포함</b> 롤링 잔고 — 고갈 판정은 이 계열 기준.</td></tr>
+    <tr><td class="k mono">is_shortage / is_shortage_with_arrivals</td><td><span class="pill calc">계산</span></td><td>해당 시점 잔고 &lt; 0 여부(입고 제외/포함).</td></tr>
+    <tr><td class="k mono">공통 스탬프</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_material_depletion_events / constrained_production_lots / data_quality_issues <span class="grain">자재×고갈 / 랏 / 이슈</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_material_depletion_events <span class="grain">자재 × 고갈 회차 · 16컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">depletion_date · depletion_sequence</td><td><span class="pill calc">계산</span></td><td>일별 최소 잔고(입고 포함)가 0 이상→미만으로 전환된 날. 재입고 후 재고갈 시 회차 증가.</td></tr>
-    <tr><td class="k mono">total_demand_on_depletion_date · depleting_lot_ids/allocation_ids/count · total_lots_constrained · depletion_description</td><td><span class="pill calc">계산</span></td><td>고갈일의 수요·유발 랏 목록·이후 제약 랏 수·설명 텍스트.</td></tr>
-    <tr><td class="k mono">(constrained) constraint_date · constraining_material_ids/count · first_constrained_sequence · furthest_completable_sequence · is_partial_completion</td><td><span class="pill calc">계산</span></td><td>랏이 자재 제약에 걸린 날·원인 자재·자재만 보면 어디까지 진행 가능한지. <b>참고 정보</b> — 할당 자체는 자재 제약을 안 걸음(§4.7).</td></tr>
-    <tr><td class="k mono">(dq) issue_type · issue_description</td><td><span class="pill calc">계산</span></td><td>BOM/재고/입고 데이터 불일치(예: BOM은 있는데 재고 레코드 없음) 목록.</td></tr>
+    <tr><td class="k mono">depletion_event_id</td><td><span class="pill calc">계산</span></td><td>연결키.</td></tr>
+    <tr><td class="k mono">material_id · uom</td><td><span class="pill src">원본</span></td><td>고갈된 자재.</td></tr>
+    <tr><td class="k mono">depletion_date</td><td><span class="pill calc">계산</span></td><td>일별 최소 잔고(입고 포함)가 0 이상→미만으로 전환된 날.</td></tr>
+    <tr><td class="k mono">depletion_sequence</td><td><span class="pill calc">계산</span></td><td>고갈 회차(재입고 후 재고갈 시 증가).</td></tr>
+    <tr><td class="k mono">depleting_lot_ids · depleting_allocation_ids</td><td><span class="pill calc">계산</span></td><td>고갈을 유발한 랏/할당 목록(평탄화됨).</td></tr>
+    <tr><td class="k mono">depleting_lots_count</td><td><span class="pill calc">계산</span></td><td>그날 소비 랏 수.</td></tr>
+    <tr><td class="k mono">total_demand_on_depletion_date</td><td><span class="pill calc">계산</span></td><td>고갈일의 총 소요.</td></tr>
+    <tr><td class="k mono">initial_inventory</td><td><span class="pill src">원본</span></td><td>시작 OnHand.</td></tr>
+    <tr><td class="k mono">shortfall_quantity</td><td><span class="pill calc">계산</span></td><td>고갈 시점 부족량(잔고의 음수 절대값).</td></tr>
+    <tr><td class="k mono">total_lots_constrained</td><td><span class="pill calc">계산</span></td><td>이 고갈로 제약되는 총 랏 수.</td></tr>
+    <tr><td class="k mono">depletion_description</td><td><span class="pill calc">계산</span></td><td>표시용 설명 문장.</td></tr>
+    <tr><td class="k mono">공통 스탬프</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_demand_shortfall <span class="grain">모델 × 월 (쇼티지 있는 조합만)</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_constrained_production_lots <span class="grain">랏당 1행 · 13컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">demand_qty_units · produced_on_time_units · shortfall_qty_units · shortfall_pct</td><td><span class="pill calc">계산</span></td><td>수요 − 정시 생산(조기 포함) = 쇼티지; 비율.</td></tr>
-    <tr><td class="k mono">primary_reason · reason_detail</td><td><span class="pill calc">계산</span></td><td>실패 랏·대기 기간을 조인한 사유 귀속(INSUFFICIENT_CAPACITY / EQUIPMENT_BLOCKED / NO_VALID_EQUIPMENT / LEAD_TIME_AND_ET_JIG_CAPACITY) + 랏 수준 상세 텍스트.</td></tr>
-    <tr><td class="k mono">delayed/failed_lot_count · delayed/failed_units · lead_time_constrained_lot_count/units</td><td><span class="pill calc">계산</span></td><td>쇼티지에 기여한 랏의 유형별 집계.</td></tr>
-    <tr><td class="k mono">blocking_process_id · blocking_process_equipment_group · bottleneck/blocked_equipment_*</td><td><span class="pill calc">계산</span></td><td>병목 공정·설비 목록(평탄화됨).</td></tr>
-    <tr><td class="k mono">earliest/latest_delay_date · target_month_end_date · earliest_possible_completion</td><td><span class="pill calc">계산</span></td><td>지연 시계열 참조점들.</td></tr>
+    <tr><td class="k mono">constrained_lot_id</td><td><span class="pill calc">계산</span></td><td><code>{sim}_{lot}</code> 연결키.</td></tr>
+    <tr><td class="k mono">lot_id · model_id</td><td><span class="pill src">원본</span></td><td>자재 제약에 걸린 랏. <b>참고 정보</b> — 할당 자체는 자재 제약을 안 걸음(§4.7).</td></tr>
+    <tr><td class="k mono">constraint_date</td><td><span class="pill calc">계산</span></td><td>처음 부족을 만난 날(min allocated_date with shortage).</td></tr>
+    <tr><td class="k mono">constraining_material_ids · constraining_materials_count</td><td><span class="pill calc">계산</span></td><td>원인 자재 목록(평탄화)·수.</td></tr>
+    <tr><td class="k mono">first_constrained_sequence</td><td><span class="pill calc">계산</span></td><td>처음 막힌 WorkSeq.</td></tr>
+    <tr><td class="k mono">furthest_completable_sequence</td><td><span class="pill calc">계산</span></td><td>자재만 보면 어디까지 진행 가능한지(first − 1).</td></tr>
+    <tr><td class="k mono">total_sequences</td><td><span class="pill calc">계산</span></td><td>랏 총 스텝 수.</td></tr>
+    <tr><td class="k mono">is_partial_completion</td><td><span class="pill calc">계산</span></td><td>furthest &lt; total — 부분 진행 가능 여부.</td></tr>
+    <tr><td class="k mono">constraint_description</td><td><span class="pill calc">계산</span></td><td>표시용 설명 문장.</td></tr>
+    <tr><td class="k mono">공통 스탬프</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_production_risk_reconciliation <span class="grain">리스크 이벤트</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_material_data_quality_issues <span class="grain">이슈당 1행 · 8컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">risk_category(_description)</td><td><span class="pill calc">계산</span></td><td>LEAD_TIME_SHORTFALL / ET_JIG_CAPACITY_ISSUE / EQUIPMENT_CAPACITY_DELAY / FAILED_* — 충족 스코어카드의 쇼티지 EA를 원인별로 배분한 분류.</td></tr>
-    <tr><td class="k mono">units_affected · total_units_at_risk · lots_affected · affected_lot_ids</td><td><span class="pill calc">계산</span></td><td>이 리스크 이벤트의 영향 규모(랏 목록 평탄화됨).</td></tr>
-    <tr><td class="k mono">months/days/max_days_delayed · actual_completion_month</td><td><span class="pill calc">계산</span></td><td>지연 정도.</td></tr>
-    <tr><td class="k mono">bottleneck_process/equipment_group/equipment_ids · delay_dates · failure_reason(_summary)</td><td><span class="pill calc">계산</span></td><td>원인 추적 정보.</td></tr>
-    <tr><td class="k mono">current/required_capacity · capacity_gap · capacity_utilization_pct</td><td><span class="pill calc">계산</span></td><td>해당 병목의 용량 수지.</td></tr>
-    <tr><td class="k mono">planned_demand_* · production_and_inventory_* · impossible_to_simulate_* · shortfall_* · source_*</td><td><span class="pill calc">계산</span></td><td>fulfillment_wide에서 가져온 대사 기준값 + 원본 레코드 링크 — <b>분류별 합 = 스코어카드 쇼티지</b>가 성립하는지 로그의 RECONCILIATION CHECK로 검증.</td></tr>
+    <tr><td class="k mono">issue_id</td><td><span class="pill calc">계산</span></td><td>예: <code>MISSING_INV_{자재}</code>.</td></tr>
+    <tr><td class="k mono">issue_type</td><td><span class="pill calc">계산</span></td><td>이슈 유형(대표: BOM에 있으나 재고 레코드 없음 — §6 RAW-MTL 커버리지와 직결).</td></tr>
+    <tr><td class="k mono">material_id</td><td><span class="pill src">원본</span></td><td>해당 자재.</td></tr>
+    <tr><td class="k mono">issue_description</td><td><span class="pill calc">계산</span></td><td>설명 문장.</td></tr>
+    <tr><td class="k mono">affected_models · affected_processes</td><td><span class="pill calc">계산</span></td><td>영향 모델/공정 목록(평탄화됨).</td></tr>
+    <tr><td class="k mono">affected_model_count · affected_process_count</td><td><span class="pill calc">계산</span></td><td>각 목록의 고유 수.</td></tr>
   </table></div></details>
 
-  <details class="tbl"><summary>SIM_unrouted_model_demand <span class="grain">모델 × 월 (현재 0건)</span></summary><div class="tablewrap"><table>
+  <details class="tbl"><summary>SIM_demand_shortfall <span class="grain">모델 × 월(쇼티지 존재분) · 38컬럼</span></summary><div class="tablewrap"><table>
     <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
-    <tr><td class="k mono">model_id · demand_qty_ea · shortfall_month · customer/sales 컬럼</td><td><span class="pill src">원본</span></td><td>라우팅이 아예 없어 시뮬레이션 불가한 수요(신모델 리스크).</td></tr>
-    <tr><td class="k mono">title · new_model_risk_description · remediation_suggestion</td><td><span class="pill calc">계산</span></td><td>표시용 텍스트.</td></tr>
+    <tr><td class="k mono">demand_shortfall_id</td><td><span class="pill calc">계산</span></td><td><code>{sim}_{model}_{month}</code> 연결키.</td></tr>
+    <tr><td class="k mono">title</td><td><span class="pill calc">계산</span></td><td>표시용 제목 문장.</td></tr>
+    <tr><td class="k mono">model_id · grouping_model · model_sales_team · model_customer_name · model_end_customer</td><td><span class="pill src">원본</span></td><td>모델·마스터 조인 차원.</td></tr>
+    <tr><td class="k mono">model_priority</td><td><span class="pill calc">계산</span></td><td>우선순위 랭크.</td></tr>
+    <tr><td class="k mono">target_month · target_month_end_date</td><td><span class="pill calc">계산</span></td><td>대상 월·월말 기준선.</td></tr>
+    <tr><td class="k mono">demand_qty_units</td><td><span class="pill src">원본</span></td><td>그 모델·월 수요 EA.</td></tr>
+    <tr><td class="k mono">produced_on_time_units</td><td><span class="pill calc">계산</span></td><td>목표월 내(조기 포함) 완료 EA.</td></tr>
+    <tr><td class="k mono">shortfall_qty_units</td><td><span class="pill calc">계산</span></td><td><code>demand − produced_on_time</code>.</td></tr>
+    <tr><td class="k mono">shortfall_pct</td><td><span class="pill calc">계산</span></td><td>쇼티지 ÷ 수요.</td></tr>
+    <tr><td class="k mono">shortfall_revenue_impact · shortfall_margin_impact</td><td><span class="pill calc">계산</span></td><td>쇼티지 × 단가 — 단가 부재로 0.</td></tr>
+    <tr><td class="k mono">delayed_lot_count · delayed_units</td><td><span class="pill calc">계산</span></td><td>지연(결국 할당) 랏 수·EA.</td></tr>
+    <tr><td class="k mono">failed_lot_count · failed_units</td><td><span class="pill calc">계산</span></td><td>실패 랏 수·EA.</td></tr>
+    <tr><td class="k mono">lead_time_constrained_lot_count · lead_time_constrained_units</td><td><span class="pill calc">계산</span></td><td>리드타임상 물리적으로 늦을 수밖에 없던 랏 수·EA.</td></tr>
+    <tr><td class="k mono">primary_reason</td><td><span class="pill calc">계산</span></td><td>INSUFFICIENT_CAPACITY / EQUIPMENT_BLOCKED / NO_VALID_EQUIPMENT / LEAD_TIME_AND_ET_JIG_CAPACITY.</td></tr>
+    <tr><td class="k mono">reason_detail</td><td><span class="pill calc">계산</span></td><td>랏 수준 상세 텍스트(가장 영향 큰 랏 목록 포함).</td></tr>
+    <tr><td class="k mono">blocking_process_id · blocking_process_equipment_group</td><td><span class="pill calc">계산</span></td><td>막힌 공정과 그 설비그룹.</td></tr>
+    <tr><td class="k mono">bottleneck_equipment_ids · bottleneck_equipment_group_ids</td><td><span class="pill calc">계산</span></td><td>만석이던 설비/그룹 목록(평탄화됨).</td></tr>
+    <tr><td class="k mono">blocked_equipment_ids · blocked_equipment_count</td><td><span class="pill calc">계산</span></td><td>용량은 있었으나 차단이던 설비 목록·수.</td></tr>
+    <tr><td class="k mono">earliest_delay_date · latest_delay_date</td><td><span class="pill calc">계산</span></td><td>지연 발생 기간.</td></tr>
+    <tr><td class="k mono">earliest_possible_completion</td><td><span class="pill calc">계산</span></td><td>가장 빨라야 언제 완료 가능한지.</td></tr>
+    <tr><td class="k mono">shortage_ids</td><td><span class="pill calc">계산</span></td><td>관련 equipment_capacity_shortages 링크(평탄화됨).</td></tr>
+    <tr><td class="k mono">공통 스탬프 5종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id · allocation_run_id · allocation_run_ts.</td></tr>
+  </table></div></details>
+
+  <details class="tbl"><summary>SIM_production_risk_reconciliation <span class="grain">리스크 이벤트 · 53컬럼</span></summary><div class="tablewrap"><table>
+    <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
+    <tr><td class="k mono">risk_record_id</td><td><span class="pill calc">계산</span></td><td>연결키.</td></tr>
+    <tr><td class="k mono">risk_category · risk_category_description</td><td><span class="pill calc">계산</span></td><td>LEAD_TIME_SHORTFALL / ET_JIG_CAPACITY_ISSUE / EQUIPMENT_CAPACITY_DELAY / FAILED_* + 설명.</td></tr>
+    <tr><td class="k mono">model_id · grouping_model · model_customer_name · model_end_customer · model_sales_team</td><td><span class="pill src">원본</span></td><td>모델·마스터 조인 차원.</td></tr>
+    <tr><td class="k mono">model_priority</td><td><span class="pill calc">계산</span></td><td>우선순위 랭크.</td></tr>
+    <tr><td class="k mono">target_month · actual_completion_month</td><td><span class="pill calc">계산</span></td><td>목표월 vs 실제 완료월.</td></tr>
+    <tr><td class="k mono">lot_id · affected_lot_ids · lots_affected</td><td><span class="pill calc">계산</span></td><td>대표 랏 / 관련 랏 목록(평탄화) / 랏 수.</td></tr>
+    <tr><td class="k mono">source_dataset · source_record_id · source_fulfillment_id</td><td><span class="pill calc">계산</span></td><td>이 리스크의 출처 레코드 링크(어느 분석에서 왔는지).</td></tr>
+    <tr><td class="k mono">units_affected · total_units_at_risk</td><td><span class="pill calc">계산</span></td><td>이 이벤트/전체의 영향 EA.</td></tr>
+    <tr><td class="k mono">months_delayed · days_delayed · max_days_delayed</td><td><span class="pill calc">계산</span></td><td>지연 정도.</td></tr>
+    <tr><td class="k mono">bottleneck_process · bottleneck_equipment_group · bottleneck_equipment_ids</td><td><span class="pill calc">계산</span></td><td>병목 공정/그룹/설비 목록(평탄화됨).</td></tr>
+    <tr><td class="k mono">delay_dates</td><td><span class="pill calc">계산</span></td><td>지연 발생일 목록(평탄화됨).</td></tr>
+    <tr><td class="k mono">failure_reason · failure_reason_summary</td><td><span class="pill calc">계산</span></td><td>실패 사유 원문/요약.</td></tr>
+    <tr><td class="k mono">is_model_blocked</td><td><span class="pill calc">계산</span></td><td>설비 차단성 실패 여부.</td></tr>
+    <tr><td class="k mono">current_capacity · required_capacity · capacity_gap · capacity_utilization_pct</td><td><span class="pill calc">계산</span></td><td>병목의 용량 수지와 가동률.</td></tr>
+    <tr><td class="k mono">planned_demand_ea / _krw</td><td><span class="pill calc">계산</span></td><td>fulfillment_wide에서 온 대사 기준(krw는 단가 부재로 0).</td></tr>
+    <tr><td class="k mono">production_and_inventory_ea / _krw</td><td><span class="pill calc">계산</span></td><td>공급 총량(대사 기준).</td></tr>
+    <tr><td class="k mono">impossible_to_simulate_ea / _krw</td><td><span class="pill calc">계산</span></td><td>시뮬레이션 불가분(대사 기준).</td></tr>
+    <tr><td class="k mono">fulfillment_shortfall_ea / _krw</td><td><span class="pill calc">계산</span></td><td>스코어카드의 쇼티지(대사 대상).</td></tr>
+    <tr><td class="k mono">shortfall_contribution_ea / _krw / _pct</td><td><span class="pill calc">계산</span></td><td>이 이벤트가 쇼티지에서 차지하는 몫 — <b>분류별 합 = 스코어카드 쇼티지</b>(로그 RECONCILIATION CHECK).</td></tr>
+    <tr><td class="k mono">revenue_at_risk · margin_at_risk · unit_price_krw</td><td><span class="pill calc">계산</span></td><td>재무 임팩트 — 단가 부재로 0/null.</td></tr>
+    <tr><td class="k mono">mitigation_strategy · action_required</td><td><span class="pill calc">계산</span></td><td>권고 조치 텍스트.</td></tr>
+    <tr><td class="k mono">공통 스탬프 5종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · revenue_plan_id · allocation_run_id · allocation_run_ts.</td></tr>
+  </table></div></details>
+
+  <details class="tbl"><summary>SIM_unrouted_model_demand <span class="grain">모델 × 월 · 14컬럼 (현재 0건)</span></summary><div class="tablewrap"><table>
+    <tr><th>컬럼</th><th>구분</th><th>의미 / 산식</th></tr>
+    <tr><td class="k mono">new_model_risk_id</td><td><span class="pill calc">계산</span></td><td>연결키.</td></tr>
+    <tr><td class="k mono">title · new_model_risk_description · remediation_suggestion</td><td><span class="pill calc">계산</span></td><td>표시용 제목·설명·권고 텍스트.</td></tr>
+    <tr><td class="k mono">model_id</td><td><span class="pill src">원본</span></td><td>라우팅이 없어 시뮬레이션 불가한 모델(신모델 리스크).</td></tr>
+    <tr><td class="k mono">demand_qty_ea</td><td><span class="pill src">원본</span></td><td>해당 수요 EA.</td></tr>
+    <tr><td class="k mono">shortfall_month</td><td><span class="pill calc">계산</span></td><td>수요의 월.</td></tr>
+    <tr><td class="k mono">customer_name · end_customer · model_sales_team</td><td><span class="pill src">원본</span></td><td>모델 마스터 조인.</td></tr>
+    <tr><td class="k mono">공통 스탬프 4종</td><td><span class="pill ok">스탬프</span></td><td>simulation_id · simulation_name · allocation_run_id · allocation_run_ts.</td></tr>
   </table></div></details>
 </section>
 
