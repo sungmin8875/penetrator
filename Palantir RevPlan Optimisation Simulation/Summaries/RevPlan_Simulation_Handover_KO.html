@@ -93,7 +93,7 @@
     <span><b>원본</b> Palantir Foundry UC2-2 «시나리오 베이스 시뮬레이션»의 MLWB 포트</span>
   </div>
   <nav class="toc">
-    <a href="#s1">1 아키텍처</a><a href="#s2">2 데이터 배선</a><a href="#s3">3 설정</a>
+    <a href="#s1">1 아키텍처</a><a href="#s2">2 데이터 흐름</a><a href="#s3">3 설정</a>
     <a href="#s4">4 시뮬레이션 로직</a><a href="#s5">5 출력 테이블</a><a href="#s6">6 데이터 한계</a><a href="#s7">7 운영 체크리스트</a>
   </nav>
 </header>
@@ -123,7 +123,7 @@
 </section>
 
 <section id="s2">
-  <h2><span class="no">2</span>데이터 배선 — 무엇을 어디서 읽어 무엇에 쓰는가</h2>
+  <h2><span class="no">2</span>데이터 흐름 — 무엇을 어디서 읽어 무엇에 쓰는가</h2>
   <p class="lede">모든 소스는 OCPM 오브젝트(<span class="mono">o_custom_*</span>)이며, <code>celonis_io.TABLE_MAP</code> / <code>COLUMN_MAP</code>이 원본 PPS/RTS 테이블명·컬럼명과의 대응을 정의합니다. 컬럼 이름이 오브젝트 SQL에서 바뀌면 여기만 고치면 됩니다.</p>
   <div class="tablewrap"><table>
     <tr><th>오브젝트</th><th>엔진 입력</th><th>용도</th><th>비고</th></tr>
