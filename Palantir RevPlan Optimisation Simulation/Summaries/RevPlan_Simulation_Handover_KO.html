@@ -80,8 +80,6 @@
   <h1>RevPlan 최적화 시뮬레이션 인수인계</h1>
   <div class="meta">
     <span><b>작성일</b> 2026-08-12</span>
-    <span><b>저장소</b> <span class="mono">sungmin8875/penetrator</span></span>
-    <span><b>브랜치</b> <span class="mono">claude/youthful-newton-ooe7x1</span></span>
     <span><b>원본</b> Palantir Foundry UC2-2 «시나리오 베이스 시뮬레이션»의 MLWB 포트</span>
   </div>
   <nav class="toc">
@@ -268,10 +266,7 @@
     <tr><th>심각도</th><th>한계</th><th>영향</th><th>대응 / 필요 조치</th></tr>
     <tr><td><span class="pill risk">높음</span></td><td><b>설비 매핑 커버리지</b> — 라우팅 398개 공정 중 126개(31.7%)만 설비 보유. 271개 실공정 + 비활성 필터로 전멸한 22개 공정이 «외주 간주» 무료 통과(실행당 ~35만 스텝).</td><td>낙관 — 실제 사내 공정이면 용량 소모가 누락됨.</td><td>매 로그의 OUTSOURCED-ASSUMED 감사 목록을 LG와 검토, 사내 공정(F1/F2 사이트) 매핑 보완. WipHistory EQPTID 대조가 검증 수단.</td></tr>
     <tr><td><span class="pill risk">높음</span></td><td><b>RAW-MTL 재고 피드 커버리지</b> — 활성 자재 다수가 OnHand에 레코드 없음(385개 자재만 보유).</td><td>자재 쇼티지가 재고 부족이 아니라 <b>데이터 부재</b>로 계산될 수 있음.</td><td>재고 피드 범위 확대를 LG에 요청(핵심 데이터 ask).</td></tr>
-    <tr><td><span class="pill ok">프론트 처리</span></td><td><b>수율</b> — 엔진은 소요·산출에 수율을 곱하지 않음(원본 Palantir와 동일).</td><td>엔진 출력은 수율 미반영 원값.</td><td>수율 반영은 <b>프론트에서 계산</b>하기로 결정(모델 오브젝트의 투입/적용/타입 수율 컬럼 사용). 엔진 쪽 <code>enable_yield_loss</code> 플래그 자리는 미사용으로 남겨둠.</td></tr>
-    <tr><td><span class="pill ok">프론트 처리</span></td><td><b>양산/시제 판별</b> — 엔진은 판별하지 않고 MES 원본값(<code>aps_prodcategory</code>)만 SimWIPMaster에 전달.</td><td>분류는 출력 컬럼 그대로.</td><td>양산/시제 구분은 <b>프론트에서 그루핑 모델 기준으로 계산</b>하기로 결정. (참고 가설: 접미 코드 <span class="mono">.KM*</span>=양산, <span class="mono">.K+숫자</span>=시제.)</td></tr>
     <tr><td><span class="pill warn">중간</span></td><td><b>PO 입고 계획 = 추정치</b>, ReceiptTargetDay 충전율 ~58%.</td><td>보충량·긴급랏 목표월의 신뢰도 제한.</td><td>StockMaster의 <code>balance_qty_wo_arrivals</code>와의 갭으로 리스크를 명시적으로 보여줄 것.</td></tr>
-    <tr><td><span class="pill warn">중간</span></td><td><b>PlanLt 이상치</b> — 라우팅에 2082년행 랏을 만들 수준의 쓰레기 값 존재.</td><td>외주 스텝 상한 캡(기본 30일)으로 방어 중 — 근본 수정은 RTS 소스에서.</td><td>매 로그의 DURATION OUTLIERS CAPPED 목록을 고객과 공유.</td></tr>
     <tr><td><span class="pill ok">해결</span></td><td><b>HOLD 랏</b> — 과거엔 홀드 랏(재공의 36.6%)을 가용 공급으로 계산.</td><td>해결됨: <code>exclude_hold</code> 기본 ON. 긴급∩홀드 충돌(90랏)은 경고 로그로 표면화.</td><td>URGENT∩HOLD 목록은 데이터 품질 이슈로 LG 보고 가치 있음.</td></tr>
     <tr><td><span class="pill ok">해결</span></td><td><b>비활성 설비</b> — Palantir는 ActiveFlag를 안 걸렀던 것으로 추정(빠른 실행 = 유령 용량).</td><td>해결됨: 2,266대 제외. 그 결과 공장이 «정직하게» 포화 — 실행 시간 문제는 스캔 메모로 해소.</td><td></td></tr>
   </table></div>
