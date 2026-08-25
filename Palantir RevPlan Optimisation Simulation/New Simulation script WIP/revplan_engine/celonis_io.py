@@ -212,7 +212,8 @@ TABLE_MAP: Dict[str, str] = {
     "PK1_BOM":                   "o_custom_BOM",                  # ✅ 2026-07-16 — model×op×material requirements (ReqQty per EA) → model_boms for material_depletion
     "PK1_MATERIAL":              "o_custom_Material",             # ✅ 2026-07-16 — material master; only UOM is joined onto model_boms (BOM has no UOM column)
     "PK1_PO_ARRIVE_PLAN":        "o_custom_PoArrivePlan",         # ✅ 2026-07-16 — PO arrival plan snapshot (BatchDate/BatchHour batched) → planned_material_arrivals
-    "RTSP_MGR_WIP_HISTORY_N":    "o_custom_WipHistory",           # ✅ 2026-08-04 — per-step WIP event history (실측 착공/완공) → measured_step_durations (customer 2026-07-30: actuals over PlanLt standards)
+    "RTSP_MGR_WIP_HISTORY_N":    "o_custom_WipHistory",           # ⚠ LEGACY since 2026-08-19 (kill switch REVPLAN_ACTUALS_SOURCE=wiphistory) — replaced by o_custom_WIP
+    "RTSP_WIP_HOURLY":           "o_custom_WIP",                  # ✅ 2026-08-19 — hourly WIP snapshot (RTSP_WIP_N projection, YYYYMMDDHH) → actuals + prev-step durations (business decision: WIP replaces WipHistory)
 }
 COLUMN_MAP: Dict[str, Dict[str, str]] = {
     "PK1_MPLAN": {
@@ -308,6 +309,27 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "QTY":        "QTY",
         "BATCH_DATE": "BatchDate",  # snapshot batch — read_planned_material_arrivals keeps the latest batch only
         "BATCH_HOUR": "BatchHour",
+    },
+    # o_custom_WIP (2026-08-19): hourly WIP snapshot — aliases confirmed from the
+    # object SQL (SELECT ... FROM RTSP_WIP_N). OP_CODE is the UN-prefixed
+    # operation code (unlike site-prefixed PROCID) — always join on OpCode.
+    "RTSP_WIP_HOURLY": {
+        "YYYYMMDDHH":             "YYYYMMDDHH",
+        "LOTID":                  "LOTID",
+        "PRODID":                 "PRODID",
+        "OP_CODE":                "OpCode",
+        "SEQ":                    "SEQ",
+        "EQPTID":                 "EQPTID",
+        "PLANNING_SITE_CODE":     "PlanningSiteCode",
+        "APS_PRODCATEGORY":       "ApsProdcategory",
+        "WIPDTTM_ST":             "WipdttmSt",
+        "PREV_ACTUAL_EQPTID":     "PrevActualEqptid",
+        "PREV_ACTUAL_START_DATE": "PrevActualStartDate",
+        "PREV_ACTUAL_END_DATE":   "PrevActualEndDate",
+        "WIPSHTQTY":              "WIPSHTQTY",
+        "WIPPNLQTY":              "WIPPNLQTY",
+        "WIPUNITQTY":             "WIPUNITQTY",
+        "G_LOT_CREATE_DTTM":      "GLotCreateDttm",
     },
     # o_custom_WipHistory (2026-08-04): object aliases from the user's SQL — some
     # raw names kept verbatim (LOTID/PRODID/PROCID/YYYYMMDD), timestamps + site
@@ -2170,7 +2192,227 @@ def _wip_history_events() -> Tuple[Optional[pl.DataFrame], Optional[str]]:
     return df, None
 
 
-def read_measured_step_durations(params) -> pl.DataFrame:
+# ⚠️ MLWB CHANGE (2026-08-19, business decision): o_custom_WIP (hourly snapshot of
+# RTSP_WIP_N) REPLACES o_custom_WipHistory as the actuals source, and only the
+# NEWEST YYYYMMDDHH hour is read — filtered in the BACKEND (server-side PQL), never
+# in the frontend. Kill switch: REVPLAN_ACTUALS_SOURCE=wiphistory restores the
+# legacy readers unchanged.
+# Known, accepted costs of the swap (assessed vs A/B runs: ~2-3% outcome shift):
+#   * measured LT shrinks to ONE completed-step duration per lot (PrevActual*),
+#     attributed to the lot's previous ROUTING step — coverage drops vs the 90d
+#     event history, most outsourced steps fall back to the PlanLt chain.
+#   * actual_first_start comes from GLotCreateDttm (nullable), actual_steps_done
+#     becomes the lot's current SEQ (a position, not an event count).
+def _actuals_source() -> str:
+    return os.environ.get("REVPLAN_ACTUALS_SOURCE", "wip").strip().lower()
+
+
+_WIP_SNAPSHOT: Optional[pl.DataFrame] = None
+_WIP_SNAPSHOT_ERR: Optional[str] = None
+
+
+def _wip_scalar(expr: str, filters: Optional[List[str]] = None):
+    """One-value PQL probe against the data model (MAX/COUNT style)."""
+    from pycelonis.pql import PQL, PQLColumn
+    import pycelonis.pql as pql
+    q = PQL()
+    for f in (filters or []):
+        q += f
+    q += PQLColumn(name="v", query=expr)
+    try:
+        pdf = pql.DataFrame.from_pql(q, data_model=data_model()).to_pandas()
+    except AttributeError:
+        pdf = data_model().export_data_frame(q)
+    return pdf["v"].iloc[0] if len(pdf) else None
+
+
+def _wip_hourly_snapshot() -> Tuple[Optional[pl.DataFrame], Optional[str]]:
+    """Newest-hour rows of o_custom_WIP, one row per lot — cached per process.
+
+    * MAX(YYYYMMDDHH) probe + server-side equality filter: the raw table holds
+      24 snapshots/day of the whole fleet, an unbounded pull is an OOM (the
+      daily-grain WipDaily already proved that at 1/24th of the volume).
+    * HALF-WRITTEN-HOUR GUARD: an hourly extraction can be mid-load when we
+      read. If the newest hour holds < 50% of the previous hour's lots, fall
+      back one hour with a loud warning instead of simulating a shrunken fleet.
+    * Site scope follows REVPLAN_WIP_SITES (default PK1), like every WIP read.
+    """
+    global _WIP_SNAPSHOT, _WIP_SNAPSHOT_ERR
+    if _WIP_SNAPSHOT is not None or _WIP_SNAPSHOT_ERR is not None:
+        return _WIP_SNAPSHOT, _WIP_SNAPSHOT_ERR
+    _T = "RTSP_WIP_HOURLY"
+    _hcol = _pql_col(_T, "YYYYMMDDHH")
+    _lcol = _pql_col(_T, "LOTID")
+    _site_flt = []
+    if WIP_SITES:
+        sites = ", ".join(f"'{s}'" for s in sorted(WIP_SITES))
+        _site_flt = [f"FILTER {_pql_col(_T, 'PLANNING_SITE_CODE')} IN ({sites})"]
+
+    def _eq(v):  # YYYYMMDDHH storage type unknown (INT vs STRING) — build both forms
+        return [f"FILTER {_hcol} = {v}", f"FILTER {_hcol} = '{v}'"]
+
+    try:
+        max_h = _wip_scalar(f"MAX({_hcol})")
+    except Exception as ex:  # noqa: BLE001
+        _WIP_SNAPSHOT_ERR = f"MAX(YYYYMMDDHH) probe failed ({ex})"
+        return None, _WIP_SNAPSHOT_ERR
+    if max_h is None:
+        _WIP_SNAPSHOT_ERR = "o_custom_WIP is empty (MAX(YYYYMMDDHH) returned nothing)"
+        return None, _WIP_SNAPSHOT_ERR
+    hour = str(max_h).split(".")[0].strip()
+
+    # guard probes (best-effort — a probe failure only skips the guard, not the read)
+    n_latest = n_prev = prev_h = None
+    for _f in _eq(hour):
+        try:
+            n_latest = _wip_scalar(f"COUNT(DISTINCT {_lcol})", _site_flt + [_f])
+            break
+        except Exception:  # noqa: BLE001
+            continue
+    for _f in (f"FILTER {_hcol} < {hour}", f"FILTER {_hcol} < '{hour}'"):
+        try:
+            prev_h = _wip_scalar(f"MAX({_hcol})", [_f])
+            break
+        except Exception:  # noqa: BLE001
+            continue
+    if prev_h is not None:
+        prev_h = str(prev_h).split(".")[0].strip()
+        for _f in _eq(prev_h):
+            try:
+                n_prev = _wip_scalar(f"COUNT(DISTINCT {_lcol})", _site_flt + [_f])
+                break
+            except Exception:  # noqa: BLE001
+                continue
+    if (n_latest is not None and n_prev is not None and float(n_prev) > 0
+            and float(n_latest) < 0.5 * float(n_prev)):
+        print(f"   ⚠ o_custom_WIP: newest hour {hour} holds only {int(n_latest):,} lots vs "
+              f"{int(n_prev):,} in hour {prev_h} — snapshot looks HALF-WRITTEN, "
+              f"falling back to hour {prev_h}")
+        hour = prev_h
+
+    _cols = {
+        "lot_id":       "LOTID",
+        "model_id":     "PRODID",
+        "op_code":      "OP_CODE",
+        "seq":          "SEQ",
+        "_site":        "PLANNING_SITE_CODE",
+        "_eqptid":      "EQPTID",
+        "_category":    "APS_PRODCATEGORY",
+        "_cur_st":      "WIPDTTM_ST",
+        "_prev_eqptid": "PREV_ACTUAL_EQPTID",
+        "_prev_st":     "PREV_ACTUAL_START_DATE",
+        "_prev_ed":     "PREV_ACTUAL_END_DATE",
+        "_sheet_qty":   "WIPSHTQTY",
+        "_pnl_qty":     "WIPPNLQTY",
+        "_unit_qty":    "WIPUNITQTY",
+        "_lot_create":  "G_LOT_CREATE_DTTM",
+    }
+    df, _last = None, None
+    for _f in _eq(hour):
+        try:
+            df = _pull(_T, _cols, filters=[_f] + _site_flt)
+            break
+        except Exception as ex:  # noqa: BLE001
+            _last = ex
+    if df is None:
+        _WIP_SNAPSHOT_ERR = f"newest-hour pull failed ({_last})"
+        return None, _WIP_SNAPSHOT_ERR
+    pre = df.height
+    df = (df.filter(pl.col("lot_id").is_not_null())
+            .sort("seq", descending=True, nulls_last=True)
+            .unique(subset=["lot_id"], keep="first"))
+    print(f"   ✓ o_custom_WIP snapshot: hour {hour} — {df.height:,} lots "
+          f"({pre:,} rows; site {sorted(WIP_SITES) if WIP_SITES else 'all'})"
+          + (f"; guard OK ({int(n_latest):,} vs prev {int(n_prev):,})"
+             if n_latest is not None and n_prev is not None else "; guard probes unavailable"))
+    _WIP_SNAPSHOT = df
+    return df, None
+
+
+def _aggregate_wip_prev_durations(df: pl.DataFrame,
+                                  routing: Optional[pl.DataFrame]) -> pl.DataFrame:
+    """Pure transform: newest-hour WIP rows -> duration medians (_MEASURED_LT_SCHEMA).
+
+    The snapshot's only complete history is the lot's PREVIOUS step
+    (PrevActualStartDate/EndDate) — but that step's OPERATION is not on the row,
+    so it is looked up from the routing: the step with the greatest WorkSeq
+    strictly below the lot's current SEQ. Durations keep the measured-LT
+    semantic: 착공→다음 착공 (prev start -> current start = run + queue);
+    prev start -> prev end is the run-only reference.
+    """
+    if routing is None or getattr(routing, "height", 0) == 0:
+        return pl.DataFrame(schema=_MEASURED_LT_SCHEMA)
+    need = {"model_id", "sequence", "process_id"}
+    if not need.issubset(set(routing.columns)):
+        return pl.DataFrame(schema=_MEASURED_LT_SCHEMA)
+
+    df = df.with_columns([
+        pl.col("_prev_st").cast(pl.Datetime, strict=False),
+        pl.col("_prev_ed").cast(pl.Datetime, strict=False),
+        pl.col("_cur_st").cast(pl.Datetime, strict=False),
+        pl.col("seq").cast(pl.Int64, strict=False),
+    ]).filter(pl.col("_prev_st").is_not_null() & pl.col("model_id").is_not_null()
+              & pl.col("seq").is_not_null())
+    if df.height == 0:
+        return pl.DataFrame(schema=_MEASURED_LT_SCHEMA)
+
+    rt = (routing.select([
+              pl.col("model_id"),
+              pl.col("sequence").cast(pl.Int64, strict=False),
+              pl.col("process_id").alias("_prev_op")])
+          .filter(pl.col("sequence").is_not_null() & pl.col("_prev_op").is_not_null())
+          .unique(subset=["model_id", "sequence"], keep="first")
+          .sort(["model_id", "sequence"]))
+    # strictly-previous routing step: asof-backward on (current SEQ - 1)
+    df = (df.with_columns((pl.col("seq") - 1).alias("_k"))
+            .sort(["model_id", "_k"])
+            .join_asof(rt, left_on="_k", right_on="sequence",
+                       by="model_id", strategy="backward")
+            .filter(pl.col("_prev_op").is_not_null()))
+    if df.height == 0:
+        return pl.DataFrame(schema=_MEASURED_LT_SCHEMA)
+
+    df = df.rename({"_prev_op": "process_id"}).with_columns([
+        ((pl.coalesce([pl.col("_cur_st"), pl.col("_prev_ed")]) - pl.col("_prev_st"))
+         .dt.total_seconds() / 3600.0).alias("step_h"),
+        ((pl.col("_prev_ed") - pl.col("_prev_st"))
+         .dt.total_seconds() / 3600.0).alias("proc_h"),
+    ]).filter(pl.col("step_h") > 0)
+
+    def _agg(frame: pl.DataFrame, keys: List[str]) -> pl.DataFrame:
+        return (frame.group_by(keys)
+                .agg([pl.col("step_h").median().alias("measured_step_hours"),
+                      pl.col("proc_h").median().alias("measured_proc_hours"),
+                      pl.len().cast(pl.Int64).alias("sample_n")])
+                .filter(pl.col("sample_n") >= MEASURED_LT_MIN_SAMPLES))
+
+    per_mo = _agg(df, ["model_id", "process_id"])
+    per_op = _agg(df, ["process_id"]).with_columns(
+        pl.lit(None, dtype=pl.Utf8).alias("model_id"))
+    cols = list(_MEASURED_LT_SCHEMA.keys())
+    return pl.concat([per_mo.select(cols), per_op.select(cols)], how="vertical")
+
+
+def read_measured_step_durations(params, routing: Optional[pl.DataFrame] = None) -> pl.DataFrame:
+    if _actuals_source() != "wiphistory":
+        snap, _err = _wip_hourly_snapshot()
+        if snap is None:
+            return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
+                          f"o_custom_WIP pull failed ({_err}) — outsourced timing stays on PlanLt")
+        if routing is None or getattr(routing, "height", 0) == 0:
+            return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
+                          "no routing frame for prev-step op attribution — "
+                          "outsourced timing stays on PlanLt")
+        out = _aggregate_wip_prev_durations(
+            snap.select(["lot_id", "model_id", "seq", "_prev_st", "_prev_ed", "_cur_st"]),
+            routing)
+        n_mo = int(out.filter(pl.col("model_id").is_not_null()).height)
+        n_op = out.height - n_mo
+        print(f"   ✓ measured_step_durations (o_custom_WIP prev-step): {snap.height:,} lots → "
+              f"{n_mo:,} (model,op) + {n_op:,} op-level medians (min n={MEASURED_LT_MIN_SAMPLES}) — "
+              "coverage is ONE completed step per lot; uncovered ops use the PlanLt chain")
+        return out
+
     df, _err = _wip_history_events()
     if df is None:
         return _empty("measured_step_durations", _MEASURED_LT_SCHEMA,
@@ -2183,7 +2425,7 @@ def read_measured_step_durations(params) -> pl.DataFrame:
     out = _aggregate_measured_durations(df)
     n_mo = int(out.filter(pl.col("model_id").is_not_null()).height)
     n_op = out.height - n_mo
-    print(f"   ✓ measured_step_durations: {df.height:,} events (last {MEASURED_LT_WINDOW_DAYS}d) → "
+    print(f"   ✓ measured_step_durations (LEGACY WipHistory): {df.height:,} events (last {MEASURED_LT_WINDOW_DAYS}d) → "
           f"{n_mo:,} (model,op) + {n_op:,} op-level medians (min n={MEASURED_LT_MIN_SAMPLES})")
     return out
 
@@ -2260,7 +2502,51 @@ def read_material_classes(params) -> pl.DataFrame:
                   "SimStockMaster.cop_class will be null")
 
 
+def _aggregate_wip_snapshot_lot_summary(df: pl.DataFrame) -> pl.DataFrame:
+    """Pure transform: newest-hour WIP rows (1/lot) -> _WIP_LOT_SUMMARY_SCHEMA.
+
+    Semantics vs the WipHistory original (announced degradations, 2026-08-19):
+      * actual_first_start  <- GLotCreateDttm (nullable in the source)
+      * actual_last_event   <- current step 착공 (WipdttmSt), else prev step end
+      * actual_steps_done   <- current SEQ (a POSITION, not an event count)
+      * actual_last_process <- OpCode (already un-prefixed — no site strip needed)
+    """
+    if df.height == 0:
+        return pl.DataFrame(schema=_WIP_LOT_SUMMARY_SCHEMA)
+    out = df.select([
+        pl.col("lot_id"),
+        pl.col("_lot_create").cast(pl.Datetime, strict=False).alias("actual_first_start"),
+        pl.coalesce([pl.col("_cur_st").cast(pl.Datetime, strict=False),
+                     pl.col("_prev_ed").cast(pl.Datetime, strict=False)]).alias("actual_last_event"),
+        pl.col("seq").cast(pl.Int64, strict=False).alias("actual_steps_done"),
+        pl.col("op_code").cast(pl.Utf8).alias("actual_last_process"),
+        pl.coalesce([pl.col("_eqptid").cast(pl.Utf8),
+                     pl.col("_prev_eqptid").cast(pl.Utf8)]).alias("actual_last_equipment"),
+        pl.col("_sheet_qty").cast(pl.Float64, strict=False).alias("actual_sheet_qty"),
+        pl.col("_pnl_qty").cast(pl.Float64, strict=False).alias("actual_pnl_qty"),
+        pl.col("_unit_qty").cast(pl.Float64, strict=False).alias("actual_unit_qty"),
+        pl.col("_category").cast(pl.Utf8).alias("aps_prodcategory"),
+    ])
+    return out.select(list(_WIP_LOT_SUMMARY_SCHEMA.keys()))
+
+
 def read_wip_history_lot_summary(params) -> pl.DataFrame:
+    if _actuals_source() != "wiphistory":
+        snap, _err = _wip_hourly_snapshot()
+        if snap is None:
+            return _empty("wip_history_lot_summary", _WIP_LOT_SUMMARY_SCHEMA,
+                          f"o_custom_WIP pull failed ({_err}) — SimWIPMaster gets null actual columns")
+        try:
+            out = _aggregate_wip_snapshot_lot_summary(snap)
+        except Exception as ex:  # noqa: BLE001 — an annotation input must never sink read_inputs
+            return _empty("wip_history_lot_summary", _WIP_LOT_SUMMARY_SCHEMA,
+                          f"snapshot lot-summary build failed ({ex}) — SimWIPMaster gets null actual columns")
+        _n_fs = int(out.select(pl.col("actual_first_start").is_not_null().sum()).item()) if out.height else 0
+        print(f"   ✓ wip_lot_summary (o_custom_WIP newest hour): {out.height:,} lots — "
+              f"actual_first_start filled for {_n_fs:,} "
+              "(GLotCreateDttm; actual_steps_done = current SEQ position)")
+        return out
+
     df, _err = _wip_history_events()
     if df is None:
         return _empty("wip_history_lot_summary", _WIP_LOT_SUMMARY_SCHEMA,
@@ -2282,12 +2568,15 @@ def read_wip_history_lot_summary(params) -> pl.DataFrame:
 # ==============================================================================
 def read_inputs(params) -> Dict[str, pl.DataFrame]:
     print("=== Celonis read_inputs ===")
+    # routing is read once and reused: the WIP-snapshot duration builder needs it
+    # to attribute each lot's PrevActual* duration to its previous ROUTING step.
+    planned_steps = read_planned_process_steps(params)               # ✅ (🔴 crosswalk)
     return {
         "revenue_plan":          read_revenue_plan(params),           # ✅
         "available_inventory":   read_available_inventory(params),    # ✅ OnHand FGI on-hand (shipped/transit=0)
         "model_priorities":      read_model_priorities(params),       # ❌ placeholder
         "wip_lots":              read_wip_lots(params),               # ✅ (🔴 crosswalk)
-        "planned_process_steps": read_planned_process_steps(params),  # ✅ (🔴 crosswalk)
+        "planned_process_steps": planned_steps,
         "model_master":          read_model_master(params),           # ✅
         "model_unit_conversion": read_model_unit_conversion(params),  # ✅
         "equipment_capacity":    read_equipment_capacity(params),     # ✅ + EquipmentGroup (group/infinite)
@@ -2298,8 +2587,8 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
         "model_boms":                read_model_boms(params),                # ✅ o_custom_BOM (+ UOM from o_custom_Material)
         "material_inventories":      read_material_inventories(params),      # ✅ o_custom_OnHand RAW-MTL rows, latest batch
         "planned_material_arrivals": read_planned_material_arrivals(params), # ✅ o_custom_PoArrivePlan, latest batch, future-dated only
-        "measured_step_durations":   read_measured_step_durations(params),   # ✅ 2026-08-04 — o_custom_WipHistory medians (dark until REVPLAN_MEASURED_LT=1)
-        "wip_history_lot_summary":   read_wip_history_lot_summary(params),   # ✅ 2026-08-05 — 1 row/lot actuals (SimWIPMaster's ACTUAL side; same cached pull)
+        "measured_step_durations":   read_measured_step_durations(params, routing=planned_steps),  # ✅ 2026-08-19 — o_custom_WIP prev-step medians (legacy: REVPLAN_ACTUALS_SOURCE=wiphistory)
+        "wip_history_lot_summary":   read_wip_history_lot_summary(params),   # ✅ 2026-08-19 — o_custom_WIP newest-hour lot actuals (same cached pull)
         "material_classes":          read_material_classes(params),          # ✅ 2026-08-05 — CopClass per material (SimStockMaster)
     }
     # NOTE — remaining stub-analysis inputs: production_risk_reconciliation needs no
