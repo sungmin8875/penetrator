@@ -47,6 +47,7 @@ from . import capacity_shortage as _cs_mod
 from . import demand_shortfall as _dsf_mod
 from . import material_depletion as _md_mod
 from . import production_risk_reconciliation as _prr_mod
+from . import uncommitted_demand as _ucd_mod
 from .allocation_engine import (
     allocate_month_by_month,
     ALLOCATION_OUTPUT_SCHEMA,
@@ -992,6 +993,64 @@ def compute_demand_shortfall(allocation, failed, new_lots, net_demand, model_pri
     })
 
 
+_UCD_BY_LOT_SCHEMA = {
+    "uncommitted_lot_id": pl.Utf8, "simulation_id": pl.Utf8, "simulation_name": pl.Utf8,
+    "lot_id": pl.Utf8, "model_id": pl.Utf8, "allocated_date": pl.Date, "target_month": pl.Utf8,
+    "final_production_units": pl.Int64, "cumulative_production_units": pl.Int64,
+    "cumulative_before_lot": pl.Int64, "total_committed_quantity": pl.Float64,
+    "sales_order_line_count": pl.Int64, "is_first_uncommitted_lot": pl.Boolean,
+    "total_revenue": pl.Float64, "total_margin": pl.Float64, "revenue_plan_id": pl.Utf8,
+    "model_priority": pl.Int64, "model_customer_name": pl.Utf8, "model_end_customer": pl.Utf8,
+    "model_sales_team": pl.Utf8, "grouping_model": pl.Utf8,
+}
+_UCD_BY_MODEL_SCHEMA = {
+    "uncommitted_model_id": pl.Utf8, "simulation_id": pl.Utf8, "simulation_name": pl.Utf8,
+    "model_id": pl.Utf8, "total_committed_quantity": pl.Float64, "sales_order_line_count": pl.Int64,
+    "total_planned_production_units": pl.Int64, "total_planned_revenue": pl.Float64,
+    "total_planned_margin": pl.Float64, "total_uncommitted_units": pl.Int64,
+    "uncommitted_lot_count": pl.Int64, "total_lot_count": pl.Int64,
+    "first_uncommitted_lot_date": pl.Date, "first_uncommitted_lot_id": pl.Utf8,
+    "model_customer_name": pl.Utf8, "model_end_customer": pl.Utf8, "model_sales_team": pl.Utf8,
+    "grouping_model": pl.Utf8, "model_priority": pl.Int64,
+    "production_overage_units": pl.Int64, "has_uncommitted_demand": pl.Boolean,
+}
+
+
+def compute_uncommitted_demand(allocation, sales_order_lines):
+    """PORTED FROM uncommitted_demand.py (run verbatim via the shim, 2026-08-26).
+
+    Committed pool = open SO quantity per model (order − shipped, cancelled lines
+    already excluded at read time); the run's NEW lots (VLs) are depleted against
+    it chronologically — lots beyond the committed pool are UNCOMMITTED (produced
+    against plan only, no order behind them). Outputs: one row per uncommitted
+    lot + a model-level summary.
+
+    ⚠️ MLWB wrapper guards (module untouched):
+      * empty/unreadable SO lines → SKIP with empty frames rather than publishing
+        an "everything uncommitted" artifact from a broken read.
+      * empty allocation → empty frames (nothing to analyze).
+    """
+    if sales_order_lines is None or getattr(sales_order_lines, "height", 0) == 0:
+        print("   ⏭  uncommitted_demand skipped: sales_order_lines is empty/unreadable "
+              "(a broken SO read must not label every lot uncommitted)")
+        return (pl.DataFrame(schema=_UCD_BY_MODEL_SCHEMA), pl.DataFrame(schema=_UCD_BY_LOT_SCHEMA))
+    if allocation is None or getattr(allocation, "height", 0) == 0:
+        return (pl.DataFrame(schema=_UCD_BY_MODEL_SCHEMA), pl.DataFrame(schema=_UCD_BY_LOT_SCHEMA))
+    out_model, out_lot = InMemoryOutput(), InMemoryOutput()
+    try:
+        _ucd_mod.compute(out_model, out_lot,
+                         InMemoryInput(sales_order_lines), InMemoryInput(allocation))
+    except Exception as ex:  # noqa: BLE001 — a risk analysis must never sink the run
+        print(f"   ⚠ uncommitted_demand failed ({type(ex).__name__}: {ex}) — empty outputs this run")
+        return (pl.DataFrame(schema=_UCD_BY_MODEL_SCHEMA), pl.DataFrame(schema=_UCD_BY_LOT_SCHEMA))
+    by_model = out_model.result if out_model.result is not None else pl.DataFrame(schema=_UCD_BY_MODEL_SCHEMA)
+    by_lot = out_lot.result if out_lot.result is not None else pl.DataFrame(schema=_UCD_BY_LOT_SCHEMA)
+    n_unc = int(by_model.filter(pl.col("has_uncommitted_demand")).height) if by_model.height else 0
+    print(f"   ✓ uncommitted_demand: {by_lot.height:,} uncommitted lots across {n_unc:,} models "
+          f"(of {by_model.height:,} models with new lots)")
+    return by_model, by_lot
+
+
 def compute_production_risk_reconciliation(allocation, failed, fulfillment_wide, et_jig_risk):
     """PORTED FROM production_risk_reconciliation.py (run verbatim via the shim, 2026-07-16).
 
@@ -1150,6 +1209,11 @@ def run_simulation(params: SimulationParams,
     risk_reconciliation = compute_production_risk_reconciliation(
         eng.allocation, eng.failed, fulfillment_wide, et_jig_risk)
 
+    # --- Tier 7: committed vs uncommitted demand (ported 2026-08-26) ----------
+    #   Unblocked by o_custom_SalesOrderLine — which new lots have no order behind them.
+    uncommitted_by_model, uncommitted_by_lot = compute_uncommitted_demand(
+        eng.allocation, inputs.get("sales_order_lines"))
+
     print("=== RevPlan simulation: done ===")
     # --- ⚠️ MLWB ADDITION (2026-08-05): two frontend master tables ---------------
     # SimWIPMaster  = allocation steps + 1-row-per-lot ACTUAL history (WipHistory).
@@ -1186,6 +1250,9 @@ def run_simulation(params: SimulationParams,
         "constrained_production_lots": constrained_production_lots,
         "material_data_quality_issues": material_data_quality,
         "production_risk_reconciliation": risk_reconciliation,
+        # committed vs uncommitted demand (ported 2026-08-26, o_custom_SalesOrderLine):
+        "uncommitted_demand_by_model": uncommitted_by_model,
+        "uncommitted_demand_by_lot": uncommitted_by_lot,
     }
 
     # --- Stamp organization_code onto every output keyed by model_id --------------

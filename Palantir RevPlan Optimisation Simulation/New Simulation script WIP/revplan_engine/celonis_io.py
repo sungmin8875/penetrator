@@ -214,6 +214,7 @@ TABLE_MAP: Dict[str, str] = {
     "PK1_PO_ARRIVE_PLAN":        "o_custom_PoArrivePlan",         # ✅ 2026-07-16 — PO arrival plan snapshot (BatchDate/BatchHour batched) → planned_material_arrivals
     "RTSP_MGR_WIP_HISTORY_N":    "o_custom_WipHistory",           # ⚠ LEGACY since 2026-08-19 (kill switch REVPLAN_ACTUALS_SOURCE=wiphistory) — replaced by o_custom_WIP
     "RTSP_WIP_HOURLY":           "o_custom_WIP",                  # ✅ 2026-08-19 — hourly WIP snapshot (RTSP_WIP_N projection, YYYYMMDDHH) → actuals + prev-step durations (business decision: WIP replaces WipHistory)
+    "PK1_SO_LINE":               "o_custom_SalesOrderLine",       # ✅ 2026-08-26 — sales order lines → committed/uncommitted demand (uncommitted_demand.py port)
 }
 COLUMN_MAP: Dict[str, Dict[str, str]] = {
     "PK1_MPLAN": {
@@ -330,6 +331,13 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "WIPPNLQTY":              "WIPPNLQTY",
         "WIPUNITQTY":             "WIPUNITQTY",
         "G_LOT_CREATE_DTTM":      "GLotCreateDttm",
+    },
+    # o_custom_SalesOrderLine (2026-08-26): aliases confirmed from the object extract.
+    "PK1_SO_LINE": {
+        "MODEL_ID":         "ModelId",          # full MODEL_NO with suffix (SPSCPB000M.K030) — same key space as allocation model_id
+        "ORDER_QUANTITY":   "OrderQuantity",    # EA
+        "SHIPPED_QUANTITY": "ShippedQuantity",  # EA
+        "LINE_STATUS":      "LineStatus",       # Awaiting Shipping / Booked / Cancelled / Closed / Entered / Picked (Partial)
     },
     # o_custom_WipHistory (2026-08-04): object aliases from the user's SQL — some
     # raw names kept verbatim (LOTID/PRODID/PROCID/YYYYMMDD), timestamps + site
@@ -2530,6 +2538,47 @@ def _aggregate_wip_snapshot_lot_summary(df: pl.DataFrame) -> pl.DataFrame:
     return out.select(list(_WIP_LOT_SUMMARY_SCHEMA.keys()))
 
 
+# ---- ✅ sales_order_lines  <-  o_custom_SalesOrderLine (2026-08-26) ------------
+# Feeds the uncommitted_demand.py port: open (committed) quantity per model =
+# Σ(OrderQuantity − ShippedQuantity) over lines with shipped < order. The module
+# consumes columns named item_no / order_quantity / shipped_quantity (Palantir's
+# dataset names) — mapped here so the port stays verbatim.
+_SO_LINE_SCHEMA = {"item_no": pl.Utf8, "order_quantity": pl.Float64, "shipped_quantity": pl.Float64}
+
+
+def read_sales_order_lines(params) -> pl.DataFrame:
+    try:
+        df = _pull("PK1_SO_LINE", {
+            "item_no":          "MODEL_ID",
+            "order_quantity":   "ORDER_QUANTITY",
+            "shipped_quantity": "SHIPPED_QUANTITY",
+            "_status":          "LINE_STATUS",
+        })
+    except Exception as ex:  # noqa: BLE001 — a risk-analysis input must never sink read_inputs
+        return _empty("sales_order_lines", _SO_LINE_SCHEMA,
+                      f"o_custom_SalesOrderLine pull failed ({ex}) — "
+                      "uncommitted-demand tables will be empty this run")
+    pre = df.height
+    # ⚠️ MLWB DIVERGENCE (2026-08-26, deliberate): drop CANCELLED lines. A cancelled
+    # order was typically never shipped, so the source's shipped<order rule would
+    # count it as committed demand — inflating the committed pool with dead orders
+    # (296 of ~13.4k lines at wiring time). Everything else passes through; the
+    # shipped<order filter itself stays inside the ported module (parity).
+    df = (df.filter(pl.col("item_no").is_not_null())
+            .filter(pl.col("_status").cast(pl.Utf8).str.strip_chars()
+                    .str.to_uppercase().fill_null("") != "CANCELLED")
+            .drop("_status")
+            .with_columns([
+                pl.col("order_quantity").cast(pl.Float64, strict=False).fill_null(0.0),
+                pl.col("shipped_quantity").cast(pl.Float64, strict=False).fill_null(0.0),
+            ]))
+    n_open = int(df.filter(pl.col("shipped_quantity") < pl.col("order_quantity")).height)
+    print(f"   ✓ sales_order_lines: {df.height:,} lines ({pre - df.height:,} cancelled excluded) — "
+          f"{n_open:,} OPEN (shipped < order) across "
+          f"{df.filter(pl.col('shipped_quantity') < pl.col('order_quantity'))['item_no'].n_unique():,} models")
+    return df
+
+
 def read_wip_history_lot_summary(params) -> pl.DataFrame:
     if _actuals_source() != "wiphistory":
         snap, _err = _wip_hourly_snapshot()
@@ -2590,6 +2639,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
         "measured_step_durations":   read_measured_step_durations(params, routing=planned_steps),  # ✅ 2026-08-19 — o_custom_WIP prev-step medians (legacy: REVPLAN_ACTUALS_SOURCE=wiphistory)
         "wip_history_lot_summary":   read_wip_history_lot_summary(params),   # ✅ 2026-08-19 — o_custom_WIP newest-hour lot actuals (same cached pull)
         "material_classes":          read_material_classes(params),          # ✅ 2026-08-05 — CopClass per material (SimStockMaster)
+        "sales_order_lines":         read_sales_order_lines(params),         # ✅ 2026-08-26 — o_custom_SalesOrderLine (uncommitted demand)
     }
     # NOTE — remaining stub-analysis inputs: production_risk_reconciliation needs no
     # new sources (it reads other analyses' outputs) — port it alongside its stub.
