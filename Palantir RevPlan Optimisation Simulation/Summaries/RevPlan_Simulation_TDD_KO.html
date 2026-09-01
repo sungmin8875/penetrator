@@ -1,0 +1,529 @@
+<title>RevPlan 시뮬레이션 기술설계문서</title>
+<style>
+  :root {
+    --bg: #F7F8F9; --surface: #FFFFFF; --ink: #20292F; --muted: #5C6B75;
+    --accent: #A85B2A; --accent-soft: #F3E7DD; --line: #E2E6E9; --code-bg: #EFF1F4;
+    --ok: #2E7D5B; --ok-bg: #E4F1EB; --warn: #96690F; --warn-bg: #F7EEDA; --risk: #B3372F; --risk-bg: #F9E7E5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181C; --surface: #1C2227; --ink: #E5EAED; --muted: #99A5AE;
+      --accent: #D08A52; --accent-soft: #33261B; --line: #2A323A; --code-bg: #232B32;
+      --ok: #6FBF9A; --ok-bg: #1C2E26; --warn: #D9AE55; --warn-bg: #302818; --risk: #E08078; --risk-bg: #33201E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181C; --surface: #1C2227; --ink: #E5EAED; --muted: #99A5AE;
+    --accent: #D08A52; --accent-soft: #33261B; --line: #2A323A; --code-bg: #232B32;
+    --ok: #6FBF9A; --ok-bg: #1C2E26; --warn: #D9AE55; --warn-bg: #302818; --risk: #E08078; --risk-bg: #33201E;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); margin: 0;
+    font-family: "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+    font-size: 15px; line-height: 1.75; -webkit-font-smoothing: antialiased; }
+  main { max-width: 960px; margin: 0 auto; padding: 48px 24px 96px; }
+  code, .mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.88em; }
+  code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent); }
+
+  header.doc { border-bottom: 3px solid var(--accent); padding-bottom: 26px; margin-bottom: 10px; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .14em; font-size: 11px; color: var(--accent); font-weight: 700; }
+  h1 { font-size: 33px; line-height: 1.25; margin: 8px 0 6px; letter-spacing: -.01em; text-wrap: balance; }
+  .subtitle { font-size: 17px; color: var(--muted); margin: 0 0 16px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 28px; color: var(--muted); font-size: 13px; }
+  .meta b { color: var(--ink); font-weight: 600; }
+
+  nav.toc { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 22px; margin: 26px 0 8px; font-size: 13.5px; columns: 2; column-gap: 36px; }
+  nav.toc h2 { font-size: 13px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); column-span: all; }
+  nav.toc a { display: block; text-decoration: none; color: var(--ink); padding: 1.5px 0; break-inside: avoid; }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc a.l2 { padding-left: 16px; color: var(--muted); }
+
+  .secbanner { background: var(--accent); color: #fff; border-radius: 8px; padding: 10px 18px;
+    font-size: 19px; font-weight: 800; letter-spacing: -.01em; margin: 60px 0 6px; scroll-margin-top: 24px; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .secbanner { color: #14181C; } }
+  :root[data-theme="dark"] .secbanner { color: #14181C; }
+  section { margin-top: 8px; }
+  h3 { font-size: 18px; margin: 34px 0 8px; scroll-margin-top: 24px; }
+  h3 .no, h4 .no { color: var(--accent); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  h4 { font-size: 15.5px; margin: 24px 0 6px; scroll-margin-top: 24px; }
+  p { max-width: 76ch; margin: 10px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; max-width: 76ch; } li { margin: 4px 0; }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); margin: 14px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; line-height: 1.55; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted);
+    padding: 10px 14px; border-bottom: 2px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.k { white-space: nowrap; font-weight: 600; }
+
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .pill.ok   { color: var(--ok);   background: var(--ok-bg); }
+  .pill.warn { color: var(--warn); background: var(--warn-bg); }
+  .pill.risk { color: var(--risk); background: var(--risk-bg); }
+  .pill.calc { color: var(--accent); background: var(--accent-soft); }
+
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0;
+    padding: 12px 16px; margin: 16px 0; max-width: 80ch; }
+  .note.risk { border-left-color: var(--risk); background: var(--risk-bg); }
+  .note.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .note b:first-child { display: block; margin-bottom: 2px; }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 0; font-size: 13px; }
+  .flow .stage { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-weight: 600; }
+  .flow .arr { color: var(--accent); font-weight: 700; }
+
+  footer { margin-top: 72px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+</style>
+
+<main>
+<header class="doc">
+  <div class="eyebrow">Celonis EMS · 기술설계문서 (Technical Design Document)</div>
+  <h1>RevPlan 최적화 시뮬레이션</h1>
+  <p class="subtitle">매출계획(이동계획) 기반 용량 할당 시뮬레이션 — Palantir Foundry UC2-2의 Celonis 이관</p>
+  <div class="meta">
+    <span><b>고객</b> LG Innotek</span>
+    <span><b>환경</b> lg-innotek.eu-1.celonis.cloud</span>
+    <span><b>작성</b> Celonis · 2026년 8월</span>
+    <span><b>상태</b> 운영 실행 중 (주간 단위 시나리오 실행)</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>목차</h2>
+  <a href="#s1">Section 1: 프로세스 개요</a>
+  <a class="l2" href="#s11">1.1 문서의 목적</a>
+  <a class="l2" href="#s12">1.2 비즈니스 배경 및 문제 정의</a>
+  <a class="l2" href="#s13">1.3 솔루션 요약</a>
+  <a class="l2" href="#s14">1.4 범위 및 현황</a>
+  <a class="l2" href="#s15">1.5 용어 정의</a>
+  <a href="#s2">Section 2: 시스템 개요</a>
+  <a class="l2" href="#s21">2.1 소스 및 대상 시스템</a>
+  <a class="l2" href="#s22">2.2 사용 중인 플랫폼 기능</a>
+  <a class="l2" href="#s23">2.3 솔루션 아키텍처 / OE 프로세스</a>
+  <a href="#s3">Section 3: 데이터 통합</a>
+  <a class="l2" href="#s31">3.1 환경 값</a>
+  <a class="l2" href="#s32">3.2 입력 오브젝트 (17종)</a>
+  <a class="l2" href="#s33">3.3 MLWB 파이프라인 (노트북 + 엔진)</a>
+  <a class="l2" href="#s34">3.4 출력 테이블 (SIM_*)</a>
+  <a class="l2" href="#s35">3.5 데이터 모델 / 퍼스펙티브</a>
+  <a class="l2" href="#s36">3.6 이벤트 및 오케스트레이션 계약</a>
+  <a href="#s4">Section 4: 시뮬레이션 엔진</a>
+  <a class="l2" href="#s41">4.1 알고리즘 상세</a>
+  <a class="l2" href="#s42">4.2 MLWB 추가/변경 사항 (원본 대비)</a>
+  <a class="l2" href="#s43">4.3 설정 레퍼런스 (파라미터·환경변수)</a>
+  <a class="l2" href="#s44">4.4 알려진 한계 및 편향</a>
+  <a class="l2" href="#s45">4.5 결과 해석 가이드</a>
+  <a class="l2" href="#s46">4.6 운영 체크리스트 / 트러블슈팅</a>
+  <a href="#apx">부록</a>
+  <a class="l2" href="#apxa">A. 실행 파라미터 페이로드</a>
+  <a class="l2" href="#apxb">B. 환경변수 전체 목록</a>
+  <a class="l2" href="#apxc">C. 재구축 체크리스트</a>
+  <a class="l2" href="#apxd">D. 자주 나온 질문 (운영 Q&amp;A)</a>
+</nav>
+
+<!-- ═══════════════════════ SECTION 1 ═══════════════════════ -->
+<div class="secbanner" id="s1">Section 1: 프로세스 개요</div>
+<section>
+
+<h3 id="s11"><span class="no">1.1</span>문서의 목적</h3>
+<p>본 기술설계문서는 LG Innotek을 위해 Celonis 플랫폼에 구현된 RevPlan 최적화 시뮬레이션의 설계와 구축 내용을 설명합니다. 컨설턴트가 처음부터 솔루션을 재구축할 수 있을 만큼 상세하게 작성되었으며(부록 C 재구축 체크리스트 포함), Section 1~2만으로 리더십 수준의 요약 자료로도 활용할 수 있습니다. 컬럼 단위 상세(전 SIM_ 테이블의 컬럼 사전)는 별도의 <a href="https://claude.ai/code/artifact/a61bd5f8-170e-49ea-9aff-a60a9a6992fe">인수인계 문서</a> §5.1에 있으며, 본 문서와 한 세트입니다.</p>
+
+<h3 id="s12"><span class="no">1.2</span>비즈니스 배경 및 문제 정의</h3>
+<p>LG Innotek 기판(substrate) 사업은 이동계획(Move Plan)이 갱신될 때마다 "이 계획을 현재 공장이 실제로 소화할 수 있는가"를 알아야 합니다 — 어느 모델이 목표월을 놓치는지, 병목이 어느 공정인지, ET-JIG·자재는 충분한지. 이 시뮬레이션은 원래 Palantir Foundry에 UC2-2 «시나리오 베이스 시뮬레이션»으로 구축되어 있었으나, Foundry 계약 종료에 따라 Celonis EMS로 이관이 필요했습니다. 요구사항은 단순 이관을 넘어, Palantir 시절 검증되지 않았던 입력 데이터 문제(유령 설비, 홀드 랏, 스냅샷 그레인 오류)의 교정까지 포함합니다.</p>
+
+<h3 id="s13"><span class="no">1.3</span>솔루션 요약</h3>
+<p>Studio 화면에서 시나리오(이동계획 리비전, 시작월, 최대 지연일 등)를 선택하면, Action Flow가 MLWB 노트북을 트리거하고, 노트북 안에서 <b>Palantir 할당 엔진의 바이트 단위 사본</b>이 실행됩니다: Celonis 오브젝트에서 17종 입력을 읽고 → 순수요를 계산하고 → 용량 제약 하의 그리디 할당을 수행하고 → 분석 6종을 산출하여 → 20개의 SIM_ 테이블로 Data Pool에 append합니다. 완료 시 OE 이벤트로 오케스트레이션이 재개되고, 데이터 모델 재로드 후 Studio 대시보드에 결과가 나타납니다. 한 번의 버튼 클릭 = 하나의 시나리오 = 약 7분입니다.</p>
+<p>핵심 설계 원칙: <b>할당 수학은 Palantir 원본과 동일하게 유지</b>하고(재동기화 가능), 모든 변경은 <code>⚠️ MLWB ADDITION/DIVERGENCE</code> 마킹 블록 + 토글(킬스위치)로 격리합니다. 따라서 어떤 실행이든 토글을 끄면 원본 동작으로 되돌릴 수 있습니다.</p>
+
+<h3 id="s14"><span class="no">1.4</span>범위 및 현황</h3>
+<div class="tablewrap"><table>
+  <tr><th>기능</th><th>현황</th></tr>
+  <tr><td>핵심 할당 엔진 (순수요 → 우선순위 → 월별 그리디 할당 → 가상 랏)</td><td><span class="pill ok">구축 완료</span> Palantir 사본</td></tr>
+  <tr><td>분석 6종 (용량부족·랏대기 / ET-JIG / 자재고갈 / 쇼티지 귀속 / 리스크 대사 / 미수주 수요)</td><td><span class="pill ok">구축 완료</span></td></tr>
+  <tr><td>입력 정직화 (비활성 설비 제외 · HOLD 랏 제외 · 최신 스냅샷 그레인 · 활성 자재 화이트리스트)</td><td><span class="pill ok">구축 완료</span> 토글식</td></tr>
+  <tr><td>실측 리드타임 (WIP 스냅샷 prev-step 기반) · 스캔 메모 런타임 최적화 (6~40×)</td><td><span class="pill ok">구축 완료</span></td></tr>
+  <tr><td>Action Flow 트리거 + OE 오케스트레이션 + 완료 이벤트 재개</td><td><span class="pill ok">구축 완료</span></td></tr>
+  <tr><td>프론트 마스터 테이블 (SimWIPMaster / SimStockMaster + CopClass 집계 규칙)</td><td><span class="pill ok">구축 완료</span></td></tr>
+  <tr><td>수율 반영 · 양산/시제 판별</td><td><span class="pill warn">프론트 처리</span> 결정사항 — 엔진은 원값 전달</td></tr>
+  <tr><td>재무 컬럼 (매출/마진) 실값화 — SalesOrderLine 단가 소스 배선</td><td><span class="pill warn">예정</span> §4.4 — 현재 0/null</td></tr>
+  <tr><td>plan-quality 잔여 2종 (revenue_plan_data_quality · unplanned_inventory)</td><td><span class="pill warn">예정</span> 입력 확보됨, 미포팅</td></tr>
+  <tr><td>lot_status 컬럼 (COMPLETED/FAILED/ABANDONED 라벨)</td><td><span class="pill warn">제안됨</span> §4.5 — 미구현</td></tr>
+</table></div>
+
+<h3 id="s15"><span class="no">1.5</span>용어 정의 (Glossary)</h3>
+<div class="tablewrap"><table>
+  <tr><th>용어</th><th>의미</th></tr>
+  <tr><td class="k">이동계획 (Move Plan)</td><td>단기 생산/출하 계획 = 시뮬레이션의 수요 입력. 리비전(RevisionNo) 단위로 갱신되며, 실행 시 하나를 선택.</td></tr>
+  <tr><td class="k">VL (가상 랏)</td><td>기존 재공으로 못 채우는 수요에 대해 엔진이 생성하는 Virtual Lot. lot_id = <code>VL-{모델}-{월}-{해시}</code>.</td></tr>
+  <tr><td class="k">차월 원칙</td><td>시작월 미지정 시 다음 달부터 계획 (Palantir 원칙 — 당월 실행은 남은 일수에 한 달 수요를 압축해 폭주).</td></tr>
+  <tr><td class="k">target_step</td><td>기본 우선순위 규칙: 잔여 공정 수 ÷ 납기까지 잔여 일수 (임계비). 고객 확정 실무 규칙.</td></tr>
+  <tr><td class="k">외주 패스스루</td><td>설비 매핑 없는 공정 = 외주 간주 (고객 규칙 2026-07-15): 용량 소모 없이 소요시간만큼 진행. <code>equipment_id='OUTSOURCED'</code>.</td></tr>
+  <tr><td class="k">스캔 메모</td><td>포화일 재탐색 제거 최적화 (결과 바이트 동일, 6~40× 가속) — 밤샘 런타임의 해결책.</td></tr>
+  <tr><td class="k">HOLD 제외</td><td>최신 스냅샷 기준 STATE=HOLD/WIPHOLD=Y 재공 랏을 스케줄에서 제외 (재공의 ~36%가 홀드).</td></tr>
+  <tr><td class="k">append-only 이력</td><td>모든 SIM_ 테이블은 실행마다 append — 조회는 반드시 <code>allocation_run_id</code>로 한 실행을 필터.</td></tr>
+  <tr><td class="k">CopClass 집계 규칙</td><td>자재 등급별 소요 계상 시점: A→SEQ2, B→M510N, C→M520N 통과일, D 제외 (StockMaster 전용).</td></tr>
+  <tr><td class="k">이월 (Carryover)</td><td>미충족 수요의 익월 재시도. «할당됨 = 충족» 기준이라 지연 랏은 중복 생성되지 않음.</td></tr>
+</table></div>
+</section>
+
+<!-- ═══════════════════════ SECTION 2 ═══════════════════════ -->
+<div class="secbanner" id="s2">Section 2: 시스템 개요</div>
+<section>
+
+<h3 id="s21"><span class="no">2.1</span>소스 및 대상 시스템</h3>
+<div class="tablewrap"><table>
+  <tr><th>시스템</th><th>역할</th><th>인터페이스</th></tr>
+  <tr><td class="k">PPS / RTS (사내)</td><td>모든 마스터·트랜잭션 소스 (이동계획, 재공, 라우팅, 설비, 재고, BOM, 수주 …)</td><td>Data Connection 추출 → Data Pool «2. Simulation» → OCPM 오브젝트 (<code>o_custom_*</code>)</td></tr>
+  <tr><td class="k">Celonis Data Pool</td><td>결과 저장 (SIM_ 테이블 20종, append-only)</td><td>pycelonis data-push API (MLWB에서)</td></tr>
+  <tr><td class="k">Studio 대시보드</td><td>시나리오 실행 UI + 결과 조회 (랏 상세, 쇼티지, 자재, JIG …)</td><td>Knowledge Model / PQL, 데이터 모델 퍼스펙티브</td></tr>
+</table></div>
+
+<h3 id="s22"><span class="no">2.2</span>사용 중인 Celonis 플랫폼 기능</h3>
+<div class="tablewrap"><table>
+  <tr><th>기능</th><th>본 솔루션에서의 사용</th></tr>
+  <tr><td class="k">Orchestration Engine (OE)</td><td>시나리오 1건 = OE 인스턴스 1건. 노트북 실행을 트리거하고 <code>finish-simulation</code> resume 이벤트에서 대기.</td></tr>
+  <tr><td class="k">MLWB</td><td>시뮬레이션 본체: <code>run_revplan_simulation.ipynb</code> + <code>revplan_engine/</code> 파이썬 패키지 (Palantir 엔진 포트).</td></tr>
+  <tr><td class="k">Action Flows</td><td>Studio 폼 → <code>/executions</code> 파라미터 전달, OE 테이블 행 생성, DM 재로드, 로드 완료 알림.</td></tr>
+  <tr><td class="k">OCPM Data Model</td><td>입력 오브젝트 17종 + SIM_ 결과 오브젝트. 퍼스펙티브: <code>test:perspective_custom_Simulation</code> (§3.5 트윈 주의).</td></tr>
+  <tr><td class="k">Studio</td><td>시나리오 시작 화면, 랏 상세 팝업, 자재 쇼티지 차트, 리스크 화면.</td></tr>
+</table></div>
+
+<h3 id="s23"><span class="no">2.3</span>솔루션 아키텍처</h3>
+<div class="flow">
+  <span class="stage">Studio 화면 (시나리오 입력)</span><span class="arr">→</span>
+  <span class="stage">Action Flow (/executions 파라미터)</span><span class="arr">→</span>
+  <span class="stage">MLWB 노트북 (papermill)</span><span class="arr">→</span>
+  <span class="stage">revplan_engine (할당 + 분석)</span><span class="arr">→</span>
+  <span class="stage">SIM_* append (Data Pool)</span><span class="arr">→</span>
+  <span class="stage">finish-simulation 이벤트</span><span class="arr">→</span>
+  <span class="stage">DM 재로드 → 대시보드</span>
+</div>
+<p><b>OE 프로세스 흐름</b> — 각 Process step은 Action Flow가 뒷받침하며, Resume은 이벤트를 대기합니다:</p>
+<div class="tablewrap"><table>
+  <tr><th>#</th><th>단계</th><th>유형</th><th>설명 / 대기 대상</th></tr>
+  <tr><td>1</td><td class="k">start-simulation-oe</td><td>Start event</td><td>Studio 폼 제출이 발생 — 시나리오 파라미터를 페이로드로 전달.</td></tr>
+  <tr><td>2</td><td class="k">Create OE Table</td><td>Process step</td><td>SIMULATION_OE_Table에 인스턴스 행 생성 (dpInstanceId 키, 파라미터 스냅샷).</td></tr>
+  <tr><td>3</td><td class="k">Trigger MLWB</td><td>Process step</td><td><code>POST /machine-learning/api/executions</code> — 노트북 실행, params에 dpInstanceId + 시나리오 값 주입 (부록 A).</td></tr>
+  <tr><td>4</td><td class="k">simulation done</td><td>Resume</td><td>노트북 마지막 셀이 <code>ce-instanceid=dpInstanceId</code>로 <code>finish-simulation</code>을 발생시킬 때까지 대기.</td></tr>
+  <tr><td>5</td><td class="k">Trigger DM reload</td><td>Process step</td><td>데이터 모델 재로드 — 새 SIM_ 행이 프론트에 반영되는 시점.</td></tr>
+  <tr><td>6</td><td class="k">Load-finished alert</td><td>Process step</td><td>재로드 완료 알림 (담당자 통지용 플로우).</td></tr>
+</table></div>
+<div class="note"><b>노트북은 데이터 모델을 재로드하지 않습니다.</b> Pool append ≠ 프론트 반영 — 재로드는 OE의 별도 단계이며, "새 실행이 화면에 안 보인다"는 문의의 1순위 원인이 이 시차입니다 (§4.6).</div>
+</section>
+
+<!-- ═══════════════════════ SECTION 3 ═══════════════════════ -->
+<div class="secbanner" id="s3">Section 3: 데이터 통합</div>
+<section>
+
+<h3 id="s31"><span class="no">3.1</span>환경 값</h3>
+<div class="tablewrap"><table>
+  <tr><th>항목</th><th>값</th></tr>
+  <tr><td class="k">Base URL</td><td class="mono">https://lg-innotek.eu-1.celonis.cloud</td></tr>
+  <tr><td class="k">Data Pool</td><td>«2. Simulation» — <span class="mono">41c041fa-1a49-4afa-8799-7779fa61e86c</span></td></tr>
+  <tr><td class="k">데이터 모델(퍼스펙티브)</td><td class="mono">test:perspective_custom_Simulation — 6570e74c-ff78-464e-bd16-142101117d26</td></tr>
+  <tr><td class="k">트윈 퍼스펙티브 (비사용)</td><td class="mono">73bc8779-7ddb-45a0-81dc-5e7f87c6ac92</td></tr>
+  <tr><td class="k">MLWB 노트북</td><td class="mono">run_revplan_simulation.ipynb (revplan_engine/ 패키지와 같은 워크벤치 폴더)</td></tr>
+  <tr><td class="k">OE 패키지 키</td><td class="mono">36f39662_626e_41c2_be62_fcd0ead2b2ce</td></tr>
+  <tr><td class="k">이벤트</td><td class="mono">start-simulation-oe · finish-simulation</td></tr>
+  <tr><td class="k">출력 접두</td><td class="mono">SIM_ (환경변수 CELONIS_OUTPUT_PREFIX)</td></tr>
+</table></div>
+<div class="note risk"><b>⚠ 시크릿:</b> 노트북 셀 3에 OE OAuth 클라이언트(<code>oe_client_id</code>/<code>oe_client_secret</code>)가 평문 하드코딩된 스톱갭이 있습니다. 이관 전 반드시 로테이션하고 MLWB 환경변수 또는 .env로 이전 후 해당 블록을 삭제하십시오.</div>
+
+<h3 id="s32"><span class="no">3.2</span>입력 오브젝트 (17종)</h3>
+<p>모든 읽기는 <code>celonis_io.py</code>에 격리되어 있습니다: <code>TABLE_MAP</code>(논리 테이블 → 오브젝트)과 <code>COLUMN_MAP</code>(원본 컬럼 → 오브젝트 별칭)이 대응을 정의하므로, 오브젝트 SQL이 바뀌면 이 두 맵만 수정합니다. 스냅샷 누적형 테이블은 전부 <b>서버사이드 최신-스냅샷 필터</b>로 바운드해서 읽습니다 (무제한 pull은 커널 OOM 사고의 원인이었음).</p>
+<div class="tablewrap"><table>
+  <tr><th>오브젝트</th><th>엔진 입력</th><th>용도 / 핵심 규칙</th></tr>
+  <tr><td class="k mono">o_custom_MovePlan</td><td class="mono">revenue_plan</td><td>수요. RevisionNo로 리비전 선택(빈값=최신), PLAN_QTY(EA)·PLAN_AMT(원, as-is — 고객 확인). 플로우가 보내는 따옴표는 자동 제거.</td></tr>
+  <tr><td class="k mono">o_custom_Model</td><td class="mono">model_master · model_unit_conversion</td><td>고객/영업팀/리드타임 + 단위변환(EaInSheet/EaInPannel/LotSize). RTS PRODID = PPS MODEL_NO (94.97% 검증, 크로스워크 불필요).</td></tr>
+  <tr><td class="k mono">o_custom_WipDaily</td><td class="mono">wip_lots</td><td>현재 재공. 최신 스냅샷 1장 → 잔여 라우팅 폭발. STATE/WIPHOLD → HOLD 제외. BomMaterialList → 활성 자재 화이트리스트. 사이트 기본 PK1.</td></tr>
+  <tr><td class="k mono">o_custom_WIP</td><td class="mono">measured_step_durations · wip_history_lot_summary</td><td>시간별(YYYYMMDDHH) 재공 스냅샷 — <b>최신 1시간만</b> 백엔드 필터로 읽음 + 반쯤 쓰인 스냅샷 가드(직전 시간 대비 랏 수 50% 미만이면 한 시간 폴백). PrevActual* 로 실측 스텝 소요, 랏 실적 요약(SimWIPMaster). WipHistory를 대체 (킬스위치: REVPLAN_ACTUALS_SOURCE=wiphistory).</td></tr>
+  <tr><td class="k mono">o_custom_ModelRoute</td><td class="mono">planned_process_steps</td><td>라우팅: WorkSeq·OperationCode·ModifiedGroup·RunLt/WaitLt/PlanLt·CHASU·GubunColumn. PlanLt 쓰레기 행 → 외주 상한 캡으로 방어.</td></tr>
+  <tr><td class="k mono">o_custom_Equipment</td><td class="mono">equipment_capacity</td><td>설비·DailyCapa(SHT/일). ActiveFlag=N / NotuseFlag=Y 제외 (약 2,266대 제외 / 1,229대 사용).</td></tr>
+  <tr><td class="k mono">o_custom_EquipmentConstraints</td><td class="mono">equipment_to_process</td><td>모델×공정→설비 <b>포지티브</b> 배정표, 최신 SimulVersion만. 커버리지 31.9%가 핵심 한계(§4.4).</td></tr>
+  <tr><td class="k mono">o_custom_EquipmentGroup</td><td>capacity 보강</td><td>설비↔그룹 매핑, InfiniteCapaYn.</td></tr>
+  <tr><td class="k mono">o_custom_UrgencyWipLot</td><td>urgency 플래그</td><td>Tier-1 긴급 랏 (Phase 0 선처리). HOLD와 충돌 시 HOLD 우선 + 경고.</td></tr>
+  <tr><td class="k mono">o_custom_OnHandLot</td><td class="mono">available_inventory</td><td>완제품 재고: SubinventoryCode <b>FGI(보유) + FGI-TRN(이동중)</b>만, 시작월 고정. FGI-RCV 등 기타 코드는 기본 제외(환경변수 조정 가능).</td></tr>
+  <tr><td class="k mono">o_custom_Shipping</td><td>shipped 버킷</td><td>당월 순출하(SALES_RESULT − 반품, ShippingDate 기준). 차월 실행에서는 0이 정상.</td></tr>
+  <tr><td class="k mono">o_custom_OnHand</td><td class="mono">material_inventories</td><td><b>자재 전용</b>: RAW-MTL 행만, 최신 배치. 수요 차감에는 사용하지 않음.</td></tr>
+  <tr><td class="k mono">o_custom_BOM</td><td class="mono">model_boms</td><td>모델×공정×자재 ReqQty(EA당). WipDaily 화이트리스트로 필터(리스트 있는 모델만).</td></tr>
+  <tr><td class="k mono">o_custom_Material</td><td class="mono">material_classes</td><td>UOM + CopClass(A/B/C/D) → StockMaster 집계 규칙.</td></tr>
+  <tr><td class="k mono">o_custom_PoArrivePlan</td><td class="mono">planned_material_arrivals</td><td>PO 입고 계획(최신 배치, 미래일자만) → 보충량. 구매 추정치.</td></tr>
+  <tr><td class="k mono">o_custom_JIGMaster / JIGDetail</td><td class="mono">et_jig_master</td><td>모델별 ET-JIG 수량·용량 (Capa_Lot = JigCapa÷JigQty).</td></tr>
+  <tr><td class="k mono">o_custom_SalesOrderLine</td><td class="mono">sales_order_lines</td><td>수주 라인 (ModelId/OrderQuantity/ShippedQuantity). <b>Cancelled 제외</b>(마킹된 의도적 편차) → 미수주 수요 분석.</td></tr>
+</table></div>
+
+<h3 id="s33"><span class="no">3.3</span>MLWB 파이프라인 (노트북 + 엔진)</h3>
+<h4>3.3.1 노트북 단계 (위에서 아래로)</h4>
+<div class="tablewrap"><table>
+  <tr><th>#</th><th>셀</th><th>수행 내용</th></tr>
+  <tr><td>1</td><td class="k">papermill 파라미터</td><td>Action Flow가 덮어쓰는 기본값: dpInstanceId, scenario_name, revenue_plan_id, start_month, max_delay_days, 토글 4종(scan_memo/measured_lt/exclude_hold/cop_usage) 등.</td></tr>
+  <tr><td>2</td><td class="k">의존성 자가치유</td><td>polars·pycelonis·requests·oauthlib 누락 시 pip install (워크벤치 재시작 대비).</td></tr>
+  <tr><td>3</td><td class="k">OE 자격증명</td><td>환경변수 &gt; 하드코딩 스톱갭 &gt; .env 순서로 로드 (⚠ §3.1 시크릿 경고).</td></tr>
+  <tr><td>4</td><td class="k">엔진 경로 탐색</td><td>revplan_engine/을 포함하는 폴더를 찾아 sys.path에 추가 (papermill cwd 불확정 대비).</td></tr>
+  <tr><td>5</td><td class="k">파라미터 정규화</td><td><b>관용적 파싱</b>: null/빈값/쓰레기 → 기본값 + 경고 (플로우 필드 삭제로 실행이 죽던 사고의 방어). 시작월 차월 원칙, start_date 백테스트 재라우팅, 토글 → REVPLAN_* 환경변수 설정, 플레이스홀더 dpInstanceId 감지.</td></tr>
+  <tr><td>6</td><td class="k">read_inputs</td><td>17종 입력 읽기 (§3.2) — 행수 감사 출력.</td></tr>
+  <tr><td>7</td><td class="k">run_simulation</td><td>엔진 실행 (§4.1) — 결과 20 테이블 dict.</td></tr>
+  <tr><td>8</td><td class="k">write_outputs</td><td>SIM_ append (§3.4). 실패해도 실행/재개를 죽이지 않는 best-effort.</td></tr>
+  <tr><td>9</td><td class="k">OE 재개</td><td><code>finish-simulation</code> CloudEvent 발생 (ce-instanceid = dpInstanceId). 플레이스홀더 ID면 <b>의도적으로 스킵</b> — 가짜 완료 이벤트 방지.</td></tr>
+</table></div>
+
+<h4>3.3.2 엔진 패키지 (revplan_engine/)</h4>
+<div class="tablewrap"><table>
+  <tr><th>파일</th><th>역할</th></tr>
+  <tr><td class="k mono">celonis_io.py</td><td>Celonis 결합 전체: 연결, TABLE_MAP/COLUMN_MAP, read_inputs(17종), write_outputs. 스냅샷 바운딩·가드·킬스위치가 전부 여기에.</td></tr>
+  <tr><td class="k mono">run_simulation.py</td><td>오케스트레이터: 순수요 → 우선순위 → 엔진 → 분석 6종 → 마스터 테이블 빌드(CopClass 규칙 포함).</td></tr>
+  <tr><td class="k mono">allocation_engine.py</td><td>Palantir 코어 사본. 편차는 마킹 블록만: 외주 훅, 긴급 프리패스, 스캔 메모(L1/L2).</td></tr>
+  <tr><td class="k mono">allocation_helpers / virtual_lot_creator / allocation_run_tracker / config / models</td><td>바이트 동일 사본 (import 재작성만).</td></tr>
+  <tr><td class="k mono">net_production_demand / monthly_fulfillment / capacity_shortage / et_jig_risk / demand_shortfall / material_depletion / production_risk_reconciliation / uncommitted_demand</td><td>포팅된 분석 모듈 — 전부 verbatim 사본, <code>_foundry_shim</code>을 통해 인메모리 구동.</td></tr>
+  <tr><td class="k mono">outsourced_allocation.py / urgent_allocation.py / priority_generation.py</td><td>MLWB 신규: 외주 패스스루(+실측 LT 체인), Tier-1 긴급 선처리, target_step/가중 우선순위.</td></tr>
+  <tr><td class="k mono">orchestration.py</td><td>OE 메시지 API로 finish-simulation 발신 (client-credentials OAuth).</td></tr>
+  <tr><td class="k mono">_foundry_shim.py</td><td>transforms.api 무해화 — Foundry 데코레이터를 no-op으로, Input/Output을 인메모리 어댑터로.</td></tr>
+</table></div>
+<div class="note warn"><b>MLWB 파일 동기화 규칙:</b> 저장소가 진실의 원천입니다. 변경 파일을 <b>부분만</b> 복사하면 버전 스큐로 AttributeError가 납니다 — 릴리스 시 git diff로 변경 파일 전체 목록을 뽑아 전부 복사할 것.</div>
+
+<h3 id="s34"><span class="no">3.4</span>출력 테이블 (Data Pool, SIM_ 접두 — 20종)</h3>
+<p>그레인·용도 요약 (컬럼 단위 상세는 인수인계 문서 §5.1 컬럼 사전):</p>
+<div class="tablewrap"><table>
+  <tr><th>테이블</th><th>그레인</th><th>내용</th></tr>
+  <tr><td class="k mono">SIM_run_tracker</td><td>실행당 1행</td><td>실행 레지스트리 + 설정 스냅샷(config_json) — 최신 실행 선택 기준.</td></tr>
+  <tr><td class="k mono">SIM_allocation</td><td>랏×스텝</td><td>핵심 산출: 배정일·설비·수량·지연 사유·고객/재무 보강·modified_group.</td></tr>
+  <tr><td class="k mono">SIM_WIPMaster</td><td>랏×스텝</td><td>allocation 전체 + WIP 실적(실측 시작/최종/수량·양산/시재) + 라우팅 차수/공정구분.</td></tr>
+  <tr><td class="k mono">SIM_StockMaster</td><td>자재×일자</td><td>사용량(CopClass 규칙)·보충량·보유량 원장 + 입고 제외 곡선(= PO 리스크).</td></tr>
+  <tr><td class="k mono">SIM_failed_allocations</td><td>랏×실패</td><td>실패 사유(INSUFFICIENT_CAPACITY / HORIZON_EXCEEDED)·대기일·병목 공정.</td></tr>
+  <tr><td class="k mono">SIM_new_lots_created</td><td>VL당 1행</td><td>가상 랏 생성 내역(목표량·착수일·리드타임).</td></tr>
+  <tr><td class="k mono">SIM_monthly_fulfillment_wide / _long</td><td>모델×월</td><td>충족 스코어카드 (수요−공급−불가분−쇼티지; long은 3레벨 카테고리 melt).</td></tr>
+  <tr><td class="k mono">SIM_equipment_capacity_shortages · SIM_lot_waiting_periods</td><td>구간 / 랏</td><td>설비그룹 연속 부족 구간 · 랏별 대기.</td></tr>
+  <tr><td class="k mono">SIM_et_jig_capacity_risk</td><td>모델×월</td><td>JIG 부족 리스크 (추가 필요 수량·시점·완화안).</td></tr>
+  <tr><td class="k mono">SIM_material_consumption_events / _depletion_events / SIM_constrained_production_lots / SIM_material_data_quality_issues</td><td>자재/랏</td><td>소요 이벤트(자재↔랏 브리지) · 고갈 시점 · 자재 제약 랏(참고용) · 데이터 품질.</td></tr>
+  <tr><td class="k mono">SIM_demand_shortfall</td><td>모델×월</td><td>쇼티지 원인 귀속 — <b>재시도 중복 없는 비즈니스 헤드라인 숫자</b>.</td></tr>
+  <tr><td class="k mono">SIM_production_risk_reconciliation</td><td>리스크 이벤트</td><td>쇼티지 3분류 대사 (LEAD_TIME / ET_JIG / EQUIPMENT — 합계 일치 검증).</td></tr>
+  <tr><td class="k mono">SIM_uncommitted_demand_by_model / _by_lot</td><td>모델 / 랏</td><td>수주 없는 생산 — 오픈 수주량 초과분 태깅 (SalesOrderLine 기반).</td></tr>
+  <tr><td class="k mono">SIM_unrouted_model_demand</td><td>모델×월</td><td>라우팅 없는 수요 (현재 0건).</td></tr>
+</table></div>
+<h4>3.4.1 push 메커니즘 (write_outputs)</h4>
+<ul>
+  <li><b>append-only 이력:</b> 최초 실행 시 생성, 이후 append — 절대 drop하지 않음. 조회는 <code>allocation_run_id</code> 필터 필수.</li>
+  <li><b>문자열 폭:</b> 생성 시 실측×2 (최소 256, 최대 4000)로 column_config 지정 — 이후 append는 그 폭 안에서.</li>
+  <li><b>리스트 컬럼 평탄화:</b> polars List 컬럼은 push 직전 쉼표 문자열로 자동 변환 (플랫폼이 중첩 Parquet 거부 — *_ids 컬럼들이 400으로 죽던 원인).</li>
+  <li><b>재시도:</b> 일시적 400(Parquet validation)은 5초 후 1회 재시도.</li>
+  <li><b>스키마 변경 절차:</b> 해당 테이블명을 <code>REVPLAN_SCHEMA_MIGRATE</code>에 넣고 1회 실행(그 테이블만 재생성·이력 소실) → 성공 확인 → <b>반드시 다시 비움</b>. append 실패 대기 방식은 금지 — 플랫폼이 스키마 불일치를 조용히 «합집합»으로 받은 사고가 있음.</li>
+  <li><b>플레이스홀더 가드:</b> dpInstanceId가 'local-test' 등이면 push 전체 스킵 (오염 방지; 개발 강제는 CELONIS_ALLOW_PLACEHOLDER_WRITE=1).</li>
+</ul>
+
+<h3 id="s35"><span class="no">3.5</span>데이터 모델 / 퍼스펙티브</h3>
+<ul>
+  <li><b>트윈 퍼스펙티브 주의:</b> 동일 오브젝트에 두 퍼스펙티브가 존재합니다. 노트북·프론트 모두 <code>test:perspective_custom_Simulation</code>(6570e74c-…)을 사용해야 하며, "프론트엔 보이는데 엔진이 못 읽는" 증상의 원인이 트윈 불일치였습니다. 전환은 <code>CELONIS_DATA_MODEL</code>.</li>
+  <li><b>관계 설정 권장 패턴:</b> SIM_ 테이블 ↔ SIM_run_tracker(실행 선택) · StockMaster ↔ Material(N:1, 안전) · PoArrivePlan/BOM은 Material 허브 경유 + 드릴다운 패널(직접 관계는 팬아웃 위험) · 자재↔랏 연결은 <code>SIM_material_consumption_events</code>가 브리지.</li>
+  <li><b>가상 랏 화면:</b> VL은 실적 오브젝트에 존재하지 않으므로, 랏 상세 팝업의 필터는 관계 전파가 아니라 <b>lot_id 텍스트 변수 직접 필터</b>로 걸어야 VL도 조회됩니다 (통계 패널은 VL에서 정의상 빈 것이 정상).</li>
+</ul>
+
+<h3 id="s36"><span class="no">3.6</span>이벤트 및 오케스트레이션 계약</h3>
+<ul>
+  <li><b>시작:</b> Action Flow가 <code>/executions</code> params로 노트북을 트리거 (부록 A). <b><code>dpInstanceId = {{1.instanceId}}</code> 매핑이 필수</b> — 없으면 노트북이 push·재개를 스킵.</li>
+  <li><b>revenue_plan_id 인용부호:</b> 플로우가 <code>'MP…'</code> 형태로 보내는 문제가 있어 엔진이 자동 제거하지만, 플로우 쪽 <code>replace(…; "'"; "")</code> 적용이 정석.</li>
+  <li><b>완료:</b> <code>POST /oe/api/packages/{OE_PACKAGE_KEY}/messages</code>, 헤더 <code>ce-instanceid=dpInstanceId</code>, <code>ce-type=finish-simulation</code>. 비 2xx면 큰 소리로 실패 (조용한 실패 = OE 영구 대기).</li>
+  <li><b>숫자 파라미터 계약:</b> 플로우 필드가 비어도 JSON null이 셀 1 기본값을 papermill로 덮어씀 → 셀 5의 관용 파서가 기본값 복원. 플로우에서 필드를 지워도 실행은 죽지 않음.</li>
+</ul>
+</section>
+
+<!-- ═══════════════════════ SECTION 4 ═══════════════════════ -->
+<div class="secbanner" id="s4">Section 4: 시뮬레이션 엔진</div>
+<section>
+
+<h3 id="s41"><span class="no">4.1</span>알고리즘 상세</h3>
+<h4>4.1.1 순수요 (net_production_demand)</h4>
+<ul>
+  <li>선택 리비전의 수요(모델×월)에서 재고 상쇄: <code>총재고 = 보유(FGI) + 이동중(FGI-TRN) + 출하</code>. 출하가 총계 <b>안</b>에 있어야 함 — 엔진이 이동중을 <code>총재고−출하−보유</code>로 역산하므로.</li>
+  <li>Forward rolling: 이른 달 잉여가 다음 달 수요를 상쇄. <code>model_id='기타매출'</code>은 생산 제외.</li>
+  <li>차감 그레인 주의: 구조는 그룹핑 모델 기준이나 <b>현재 소스에 GroupingModel 값이 없어 개별 MODEL_NO로 동작</b> (파생 버전 간 재고 상호 대체 없음 — §4.4).</li>
+</ul>
+<h4>4.1.2 우선순위 (target_step)</h4>
+<ul>
+  <li><code>priority = dense_rank(잔여 스텝 ÷ 잔여 일수, 내림차순)</code> — 월 내 랭킹. 이월분은 99999999로 후순위.</li>
+  <li>가중 방식(매출/마진/납기)은 <b>명시적 옵트인 전용</b> — 플로우가 가중치를 항상 보내므로 값 존재만으로 켜지지 않게 봉인.</li>
+</ul>
+<h4>4.1.3 Phase 0 — 긴급 랏</h4>
+<ul>
+  <li>UrgencyWipLot 랏을 등록일 오래된 순으로 월별 루프 전에 완주 할당. 생산량은 해당 모델 수요에 크레딧(중복 랏 방지). 목표월 = ReceiptTargetDay(충전율 ~58%) 우선.</li>
+</ul>
+<h4>4.1.4 월별 그리디 루프 (시작월 → +3개월)</h4>
+<ul>
+  <li><b>Phase 1 (재공):</b> 필요량 × 1.1 버퍼만큼 랏 선별 → 잔여 라우팅 전체 할당 시도. 한 스텝 실패 = 랏 전체 실패 (단, 실패 전 스텝의 기록·용량 소모는 유지).</li>
+  <li><b>Phase 2 (VL):</b> 부족분을 LotSize(EA→SHT 검증: ÷EaInSheet ≈ 5 SHT) 단위로 분할 생성, 시작일은 그루핑별 착수율로 스로틀.</li>
+  <li><b>조기 종료:</b> 루프 조건이 <code>units_fulfilled &lt; total_demand</code>라서 수요 충족 시 진행 중이던 버퍼 초과 랏은 <b>중단(abandoned)</b> — 실패도 성공도 아닌 제3 상태 (§4.5).</li>
+  <li><b>이월:</b> «할당됨 = 충족». 미할당분만 익월에 <b>새 lot id의 VL</b>로 재시도 → 실패 랏 수가 수요 대비 최대 4배까지 부풀 수 있음. 윈도우 마지막 달에서 종료.</li>
+</ul>
+<h4>4.1.5 스텝 1건의 할당 (코어)</h4>
+<ul>
+  <li>OperationCode → 포지티브 배정표에서 설비 후보. 후보 없음 → ① 논리 공정 0일 통과 ② 외주 분기(4.1.6) ③ (외주 토글 OFF일 때만) FAILED_NO_EQUIPMENT.</li>
+  <li>직전 스텝 완료일부터 하루씩 전진하며 <code>사용량+SHT ≤ DailyCapa</code>인 첫 (일,설비)에 배정. 랏당 일일 스텝 상한.</li>
+  <li>실패: max_delay_days(운영 90일) 내 자리 없음 → <b>FAILED_INSUFFICIENT_CAPACITY</b> (병목 공정을 지목 — 증설로 해결 가능한 유형); 날짜가 계획 지평선 초과 → <b>FAILED_HORIZON_EXCEEDED</b> (리드타임이 달력을 초과 — 계획 시점의 문제). 두 상태는 같은 지각의 두 문턱이며 config가 상태 간 이동을 만듦 — 집계는 합산, 진단은 분리.</li>
+  <li><b>스캔 메모 (⚡):</b> 실행 중 용량 사용량이 단조 증가한다는 불변식을 이용 — L1: 스텝 SHT가 후보 최대 총용량 초과 시 즉시 동일 판정 실패, L2: (공정,차단셋,일)별 «못 들어감이 증명된 최소 수량» 메모. 결과 바이트 동일 검증 완료(7 시나리오 A/B + 6,000스텝), 6~40× 가속.</li>
+</ul>
+<h4>4.1.6 외주 패스스루</h4>
+<ul>
+  <li>규칙: 설비 매핑 없음 = 외주 (외주 공정은 RTS가 설비 계획을 안 하므로 매핑 부재가 정상). 용량 소모 없이 «계획 완료» 후 다음 스텝.</li>
+  <li>소요시간 체인: ① WIP 실측 중앙값 (모델×공정 → 공정 단독; measured_lt ON) ② 라우팅 PlanLt (99.1% 충전) ③ RunLt×SHT+WaitLt ④ 기본값. 24h/일 환산, <b>상한 30일 캡</b>(2082년행 랏 사고 방어) + 캡 감사 출력.</li>
+  <li>완료일이 랏 last-step date로 기록 → 외주 리드타임은 실제 경과시간. 실행마다 OUTSOURCED-ASSUMED 감사 목록 출력 — <b>이 목록의 사내(F1/F2) 공정 = 매핑 누락 신호</b>.</li>
+</ul>
+<h4>4.1.7 분석 6종 (후처리 — 할당에 역영향 없음)</h4>
+<div class="tablewrap"><table>
+  <tr><th>분석</th><th>방법</th></tr>
+  <tr><td class="k">설비 용량 부족 / 랏 대기</td><td>DelayRecord를 설비그룹×연속일 구간으로 병합 + 랏별 대기 기간.</td></tr>
+  <tr><td class="k">ET-JIG 리스크</td><td>목표월 초과 랏 집계 → 필요 JIG 수·시점 역산 (월 용량 = JigCapa÷JigQty × 30).</td></tr>
+  <tr><td class="k">자재 고갈</td><td>소요 = 할당 스텝 × BOM ReqQty × 생산 EA. 자재별 롤링 잔고(입고 포함/제외 2계열), 0 하회 = 고갈. 재고 차감은 자재 총량 1회 (차수는 라벨).</td></tr>
+  <tr><td class="k">수요 쇼티지 귀속</td><td>모델×월 쇼티지 = 수요 − 정시 생산; 실패/대기/리드타임 조인으로 원인 부여.</td></tr>
+  <tr><td class="k">리스크 대사</td><td>스코어카드 쇼티지를 LEAD_TIME_SHORTFALL(잔여 분류, 계획 타이밍) / ET_JIG(투자) / EQUIPMENT_DELAY(증설) 3분류로 배분 — <b>합계 일치 검증</b>.</td></tr>
+  <tr><td class="k">미수주 수요</td><td>오픈 수주(주문−출하, Cancelled 제외)를 신규 랏 생산에 시간순 차감 — 초과분 랏 = UNCOMMITTED. 완료 랏 기준(실패 랏의 null 수량은 계산에서 제외됨 — 각주 필수).</td></tr>
+</table></div>
+<h4>4.1.8 마스터 테이블 빌드</h4>
+<ul>
+  <li><b>SimWIPMaster</b> = allocation + WIP 랏 실적 요약(lot 조인) + 라우팅 (모델,공정,WorkSeq) 조인 CHASU·GubunColumn.</li>
+  <li><b>SimStockMaster</b> = 자재×일자 원장: <code>보유량 = 초기 OnHand + 누적 보충 − 누적 사용</code>; 사용량은 CopClass 규칙 적용(A→SEQ2·B→M510N·C→M520N, D 제외, 앵커 없으면 0); 입고 제외 곡선과의 차 = PO 리스크. 소비 드릴다운(consumption_events)은 BOM 스텝 타이밍 유지 — 의도된 차이.</li>
+</ul>
+
+<h3 id="s42"><span class="no">4.2</span>MLWB 추가/변경 사항 (Palantir 원본 대비)</h3>
+<div class="tablewrap"><table>
+  <tr><th>변경</th><th>토글 (노트북 기본)</th><th>내용 / 근거</th></tr>
+  <tr><td class="k">비활성 설비 제외</td><td>기본 ON</td><td>ActiveFlag=N·NotuseFlag=Y 제거 — Palantir는 미필터 추정(유령 용량으로 빠른 실행). 고객 확인(2026-07-30 ActiveFlag).</td></tr>
+  <tr><td class="k">재공 그레인 교정</td><td>내장</td><td>WipDaily 최신 스냅샷 1장 + 잔여 라우팅 폭발 (원본은 67일치 이력을 스텝으로 오인).</td></tr>
+  <tr><td class="k">HOLD 랏 제외</td><td class="mono">exclude_hold='1'</td><td>STATE=HOLD/WIPHOLD=Y 제외 — 재공의 ~36%가 홀드(유령 공급 제거). URGENT∩HOLD는 HOLD 우선 + 경고.</td></tr>
+  <tr><td class="k">외주 패스스루</td><td>기본 ON</td><td>고객 규칙 2026-07-15 §4. OFF = 원본 FAILED_NO_EQUIPMENT.</td></tr>
+  <tr><td class="k">긴급 랏 선처리</td><td>기본 ON</td><td>Tier-1 (UrgencyWipLot) — 원본의 우선 규칙을 명시적 Phase 0으로.</td></tr>
+  <tr><td class="k">스캔 메모</td><td class="mono">scan_memo='1'</td><td>결과 바이트 동일 런타임 최적화 (밤샘 → ~7분). OFF = 원본 스캔.</td></tr>
+  <tr><td class="k">실측 리드타임</td><td class="mono">measured_lt='1'</td><td>외주 소요를 실측 중앙값 우선으로. WIP 스냅샷 전환 후 커버리지 축소(랏당 직전 1스텝) — 영향 ~2-3% A/B 검증.</td></tr>
+  <tr><td class="k">WIP 오브젝트 전환</td><td class="mono">REVPLAN_ACTUALS_SOURCE</td><td>o_custom_WIP(시간별, 최신 1시간)가 WipHistory 대체 (비즈니스 결정 2026-08-19). 반쯤 쓰인 스냅샷 가드 포함.</td></tr>
+  <tr><td class="k">CopClass 집계 규칙</td><td class="mono">cop_usage='1'</td><td>StockMaster 사용량 계상 시점 재배치 (고객/아리아 2026-08-11).</td></tr>
+  <tr><td class="k">활성 자재 화이트리스트</td><td>기본 ON</td><td>BOM을 WipDaily BomMaterialList(MES 실투입 목록)로 필터.</td></tr>
+  <tr><td class="k">SO Cancelled 제외</td><td>read 내장</td><td>취소 주문이 committed로 계상되는 원본 규칙의 결함 보정 (마킹된 편차).</td></tr>
+  <tr><td class="k">append-only + run_id</td><td>내장</td><td>원본의 drop-recreate 대신 전체 실행 이력 보존.</td></tr>
+</table></div>
+
+<h3 id="s43"><span class="no">4.3</span>설정 레퍼런스</h3>
+<h4>4.3.1 시나리오 파라미터 (Action Flow → 노트북 셀 1)</h4>
+<div class="tablewrap"><table>
+  <tr><th>파라미터</th><th>기본</th><th>의미</th></tr>
+  <tr><td class="k mono">dpInstanceId</td><td class="mono">local-test</td><td>OE 상관키. 플레이스홀더면 push·재개 스킵. 플로우에서 {{1.instanceId}} 필수.</td></tr>
+  <tr><td class="k mono">revenue_plan_id</td><td>'' = 최신</td><td>이동계획 RevisionNo. 따옴표 자동 제거.</td></tr>
+  <tr><td class="k mono">start_month</td><td>'' = 차월</td><td>YYYYMM 명시 시 그대로.</td></tr>
+  <tr><td class="k mono">start_date</td><td>'' = 라이브</td><td>ISO 날짜 = 백테스트("오늘"을 그 날로). YYYYMM 오입력은 start_month로 재라우팅.</td></tr>
+  <tr><td class="k mono">max_delay_days</td><td>200 (운영 90)</td><td>스텝당 최대 대기일. 현실값은 고객 미확정 — 실패↔지연 믹스를 좌우.</td></tr>
+  <tr><td class="k mono">scan_memo · measured_lt · exclude_hold · cop_usage</td><td>전부 '1'</td><td>§4.2 토글. '0' = 킬스위치/AB 베이스라인.</td></tr>
+  <tr><td class="k mono">weight_* · use_weighted_priority · prototype_pct</td><td>50/30/20 · OFF · 0</td><td>가중 우선순위 옵트인 전용; 시제율은 정책 미정 자리.</td></tr>
+</table></div>
+<p>환경변수 전체 목록은 부록 B.</p>
+
+<h3 id="s44"><span class="no">4.4</span>알려진 한계 및 편향</h3>
+<div class="tablewrap"><table>
+  <tr><th>심각도</th><th>한계</th><th>영향 / 대응</th></tr>
+  <tr><td><span class="pill risk">높음</span></td><td><b>설비 매핑 커버리지</b> — 라우팅 398개 공정 중 127개(31.9%)만 설비 보유. 270개 공정 ≈ 실행당 33만 스텝이 외주 간주 무료 통과.</td><td>낙관 편향 — 사내 공정이면 용량 소모 누락. OUTSOURCED-ASSUMED 감사 목록을 LG와 검토해 매핑 보완이 대응.</td></tr>
+  <tr><td><span class="pill risk">높음</span></td><td><b>RAW-MTL 재고 피드 커버리지</b> — 활성 자재 다수가 OnHand에 레코드 없음(~370개 자재만).</td><td>자재 쇼티지가 재고 부족이 아닌 데이터 부재로 계산될 수 있음 — 피드 확대는 LG 데이터 ask.</td></tr>
+  <tr><td><span class="pill warn">중간</span></td><td><b>재무 컬럼 0/null</b> — 단가·마진 소스 부재. 모든 $·₩ 표기는 KRW이며 실값 아님.</td><td>SalesOrderLine의 SellingPrice/환율이 확보된 단가 소스 — 배선 시 매출 계열 실값화 가능(예정). 마진은 원가 소스 자체가 없음.</td></tr>
+  <tr><td><span class="pill warn">중간</span></td><td><b>그룹핑 모델 미충전</b> — 재고 상쇄·랏 풀링이 개별 MODEL_NO 기준으로 동작.</td><td>GroupingModel 충전 소스(모델 마스터 또는 SO라인) 확정 시 그룹 기준 전환 가능(결과 변동 — 킬스위치 필요).</td></tr>
+  <tr><td><span class="pill warn">중간</span></td><td><b>PO 입고 = 추정치</b>, ReceiptTargetDay 충전 ~58%, PlanLt 이상치(캡으로 방어).</td><td>StockMaster의 입고 제외 곡선으로 리스크 명시 / 캡 감사 목록 공유.</td></tr>
+  <tr><td><span class="pill ok">해결</span></td><td>HOLD 랏 유령 공급 · 유령 설비 · WipDaily 그레인 · Parquet 중첩 400 · 밤샘 런타임</td><td>§4.2의 토글/내장 교정으로 해소.</td></tr>
+</table></div>
+<p><b>확인된 병목 (모든 입력 교정에도 불변):</b> <span class="mono">13.Laser / M717N</span> 제1 병목 (최근 실행: 연속 493일 부족 구간, 실패 2만+), <span class="mono">5.도금 (M510N/M710N)</span> 제2. DailyCapa 중앙값 5 SHT vs VL ~30 SHT의 구조적 포화.</p>
+
+<h3 id="s45"><span class="no">4.5</span>결과 해석 가이드</h3>
+<ul>
+  <li><b>랏 3분류:</b> 완주 = <code>units_produced &gt; 0</code>인 lot (최종 스텝에만 기록됨 — DISTINCT lot 카운트에 CASE로 사용) · 실패 = failed_allocations의 lot · 중단 = 수요 충족으로 방치된 버퍼 초과 랏(양쪽 어디에도 없음). <b>SIM_allocation의 distinct lot 수는 «시도»이지 «성공»이 아님</b> — 실패 랏도 실패 전 스텝이 남습니다.</li>
+  <li><b>실패 랏 수는 재시도로 부풀어 있음:</b> 이월이 매달 새 VL을 만들므로 수요 1건이 실패 랏 최대 4건. <b>헤드라인은 SIM_demand_shortfall(모델×월, 중복 없음)로 보고</b>, 랏 수는 신규/재시도(priority=99999999) 분리 진단용.</li>
+  <li><b>같은 공정 2회 표시:</b> ModifiedGroup(공정그룹) 표시 때문 — 다른 WorkSeq의 별개 스텝(빌드업 다회 통과). sequence·CHASU 컬럼 병기로 해소.</li>
+  <li><b>월별 집계:</b> 생산은 최종 스텝 행(units_produced)·충족 테이블로만 — allocation 행 합산은 스텝 수만큼 곱해짐.</li>
+  <li><b>제안(미구현):</b> lot_status 라벨 컬럼(COMPLETED/FAILED/ABANDONED) — 위 함정 전부를 등호 필터 하나로 대체.</li>
+</ul>
+
+<h3 id="s46"><span class="no">4.6</span>운영 체크리스트 / 트러블슈팅</h3>
+<div class="tablewrap"><table>
+  <tr><th>증상</th><th>점검 순서</th></tr>
+  <tr><td class="k">새 실행이 화면에 안 보임</td><td>① DM 재로드가 push 이후에 돌았나 (pool append ≠ 프론트 반영) ② 보는 퍼스펙티브가 test 트윈인가 ③ run_id 필터. — 전례상 셋 중 하나.</td></tr>
+  <tr><td class="k">실행이 밤새 돎</td><td>scan_memo가 OFF인지, 수요 리비전이 비정상(전체 636 리비전 통합 등)인지. 정상 실행은 ~7분.</td></tr>
+  <tr><td class="k">400 Parquet 실패</td><td>1회 자동 재시도. 지속 시: 리스트/중첩 컬럼이 새로 생겼는지(평탄화 가드 통과 여부), 문자열 폭 초과인지.</td></tr>
+  <tr><td class="k">AttributeError (엔진 임포트)</td><td>MLWB 파일 부분 복사로 인한 버전 스큐 — 변경 파일 전체 재복사.</td></tr>
+  <tr><td class="k">Table not found (오브젝트)</td><td>퍼스펙티브 트윈 불일치 또는 오브젝트 기술명 확인 (COLUMN_MAP 별칭 포함).</td></tr>
+  <tr><td class="k">float(None) 류 파라미터 오류</td><td>플로우 필드 삭제 → JSON null. 셀 5 관용 파서가 방어 — 새 파라미터 추가 시 같은 패턴 적용할 것.</td></tr>
+  <tr><td class="k">로그 감사 라인 읽기</td><td>HOLD 제외 수 / CopClass 분포(0이면 값 체계 변경 의심) / OUTSOURCED-ASSUMED 목록 / 측정 LT 설치 수 / WIP 스냅샷 시각+가드 / 스캔 메모 ON·OFF — 실행 상태 요약은 전부 로그에 있음.</td></tr>
+</table></div>
+</section>
+
+<!-- ═══════════════════════ APPENDIX ═══════════════════════ -->
+<div class="secbanner" id="apx">부록</div>
+<section>
+
+<h3 id="apxa"><span class="no">A.</span>실행 파라미터 페이로드 (/executions)</h3>
+<pre><code>POST {BASE_URL}/machine-learning/api/executions
+{
+  "notebookId": "&lt;노트북 ID&gt;",
+  "executionFileName": ".../run_revplan_simulation.ipynb",
+  "params": {
+    "dpInstanceId":    "{{1.instanceId}}",        // 필수 — OE 상관키
+    "scenario_name":   "{{시나리오명}}",
+    "revenue_plan_id": "{{replace(리비전; \"'\"; \"\")}}",
+    "start_month":     "202609",                   // '' = 차월
+    "max_delay_days":  "90",
+    "scan_memo": "1", "measured_lt": "1",
+    "exclude_hold": "1", "cop_usage": "1"
+  }
+}
+// 완료: POST /oe/api/packages/{OE_PACKAGE_KEY}/messages
+//   ce-instanceid: &lt;dpInstanceId&gt;   ce-type: finish-simulation
+//   body: { simulation_id, scenario_name, status: "COMPLETE" }</code></pre>
+
+<h3 id="apxb"><span class="no">B.</span>환경변수 전체 목록</h3>
+<div class="tablewrap"><table>
+  <tr><th>변수</th><th>기본</th><th>의미</th></tr>
+  <tr><td class="k mono">CELONIS_DATA_POOL / CELONIS_DATA_MODEL</td><td>«2. Simulation» / 6570e74c-…</td><td>연결 대상 풀·퍼스펙티브.</td></tr>
+  <tr><td class="k mono">CELONIS_OUTPUT_PREFIX</td><td>SIM_</td><td>출력 테이블 접두.</td></tr>
+  <tr><td class="k mono">CELONIS_OUTPUT_RESET</td><td>(unset)</td><td>1 = 전 SIM_ 재생성 (전체 이력 삭제 — 비상용).</td></tr>
+  <tr><td class="k mono">CELONIS_ALLOW_PLACEHOLDER_WRITE</td><td>(unset)</td><td>1 = 플레이스홀더 ID로도 push (개발용).</td></tr>
+  <tr><td class="k mono">REVPLAN_SCAN_MEMO</td><td>0 (노트북이 1로)</td><td>스캔 메모 최적화.</td></tr>
+  <tr><td class="k mono">REVPLAN_MEASURED_LT (+_WINDOW_DAYS=90, _MIN_SAMPLES=5)</td><td>0 (노트북 1)</td><td>외주 실측 LT + 집계 파라미터.</td></tr>
+  <tr><td class="k mono">REVPLAN_EXCLUDE_HOLD_LOTS</td><td>0 (노트북 1)</td><td>HOLD 랏 제외.</td></tr>
+  <tr><td class="k mono">REVPLAN_COP_USAGE</td><td>0 (노트북 1)</td><td>CopClass 집계 규칙 (StockMaster).</td></tr>
+  <tr><td class="k mono">REVPLAN_ACTUALS_SOURCE</td><td>wip</td><td>실적 소스: wip(o_custom_WIP 최신 1시간) / wiphistory(레거시 킬스위치).</td></tr>
+  <tr><td class="k mono">REVPLAN_WIP_SITES / REVPLAN_WIP_MODE</td><td>PK1 / remaining_route</td><td>재공 사이트 범위 / 읽기 방식.</td></tr>
+  <tr><td class="k mono">REVPLAN_SHIPPED_MODE</td><td>on</td><td>off = 출하 버킷 비활성.</td></tr>
+  <tr><td class="k mono">REVPLAN_ONHAND_FGI_CODES / _TRANSIT_CODES</td><td>FGI / FGI-TRN</td><td>수요 차감에 포함할 서브인벤토리 코드.</td></tr>
+  <tr><td class="k mono">REVPLAN_MATERIAL_SUBINV_CODES</td><td>RAW-MTL</td><td>자재 재고로 취급할 코드.</td></tr>
+  <tr><td class="k mono">REVPLAN_SCHEMA_MIGRATE</td><td>'' (빈값)</td><td>1회성 테이블 재생성 목록 — 릴리스 후 반드시 비움.</td></tr>
+  <tr><td class="k mono">oe_client_id / oe_client_secret / OE_PACKAGE_KEY / OE_EVENT_TYPE</td><td>—</td><td>OE 재개 이벤트 자격증명·대상 (⚠ §3.1).</td></tr>
+  <tr><td class="k mono">ENGINE_PARENT</td><td>(자동 탐색)</td><td>revplan_engine/ 상위 폴더 강제 지정.</td></tr>
+</table></div>
+
+<h3 id="apxc"><span class="no">C.</span>재구축 체크리스트</h3>
+<ol>
+  <li><b>코드 배치:</b> 저장소의 «New Simulation script WIP» 폴더 전체(<code>revplan_engine/</code> + <code>run_revplan_simulation.ipynb</code>)를 MLWB 워크벤치에 업로드 — 노트북은 revplan_engine 폴더 <b>옆</b>(같은 부모)에.</li>
+  <li><b>자격증명:</b> OE OAuth 클라이언트 생성 → <code>oe_client_id/secret</code>·<code>OE_PACKAGE_KEY</code>를 MLWB 환경변수 또는 .env로 (노트북 셀 3 하드코딩 블록은 삭제).</li>
+  <li><b>데이터 전제:</b> §3.2의 17개 오브젝트가 데이터 모델(test 퍼스펙티브)에 존재·로드되어 있을 것. 자가 점검: <code>python -m revplan_engine.celonis_io</code> (풀 테이블 + 모델 나열).</li>
+  <li><b>수동 검증 실행:</b> 노트북을 수동 실행 (dpInstanceId=local-test → push·OE 스킵이 정상). read_inputs 행수와 §4.6 감사 라인 확인.</li>
+  <li><b>OE 프로세스:</b> §2.3 6단계 구성 — start-simulation-oe 이벤트, OE 테이블 행 생성 플로우, /executions 트리거(부록 A 매핑: <b>dpInstanceId={{1.instanceId}}</b>, 리비전 따옴표 제거), finish-simulation resume, DM 재로드 + 알림.</li>
+  <li><b>첫 운영 실행:</b> Studio에서 트리거 → 로그에서 감사 라인 확인 → SIM_ 20 테이블 생성 확인 → DM 재로드 → 대시보드 run_id 필터 확인.</li>
+  <li><b>대시보드 규칙 전파:</b> run_id 필터 · 성공 랏 = units_produced&gt;0 · VL 팝업은 텍스트 변수 필터 (§3.5, §4.5).</li>
+</ol>
+
+<h3 id="apxd"><span class="no">D.</span>자주 나온 질문 (운영 Q&amp;A)</h3>
+<div class="tablewrap"><table>
+  <tr><th>질문</th><th>답</th></tr>
+  <tr><td class="k">SIM_allocation distinct 랏 ≈ 2.9만인데 실패도 2.2만?</td><td>정상 — distinct는 «시도»이고 실패 랏의 실패 전 스텝도 남음. 성공은 units_produced&gt;0 (~5천대), 나머지 소수는 수요 충족으로 중단된 랏 (§4.5).</td></tr>
+  <tr><td class="k">실패가 왜 이렇게 많나?</td><td>계획이 정직 용량의 ~6배 + 이월 재시도가 랏 수를 곱함. 헤드라인은 demand_shortfall (모델×월)로 (§4.5).</td></tr>
+  <tr><td class="k">한 랏에 같은 공정이 두 번?</td><td>공정그룹 표시 문제 — 다른 WorkSeq의 별개 스텝(다회 통과). sequence/CHASU 병기.</td></tr>
+  <tr><td class="k">가상 랏 팝업이 비어 있음</td><td>통계(실적) 패널은 VL에서 정의상 빈 것. 시뮬레이션 패널이 비면 관계 전파 필터 → lot_id 텍스트 변수 필터로 교체.</td></tr>
+  <tr><td class="k">매출·마진이 전부 0/$?</td><td>단가·마진 소스 부재 (§4.4). $ 표기는 원본 포맷 문자열 — 값은 KRW 스케일.</td></tr>
+  <tr><td class="k">재고(+transit) 고려되나?</td><td>됨 — OnHandLot FGI+FGI-TRN + 당월 출하가 forward-rolling으로 차감 (§4.1.1). 자재 재고는 분석용(할당 제약 아님).</td></tr>
+  <tr><td class="k">차감이 그룹핑 모델 기준인가?</td><td>구조는 그룹핑 그레인이나 소스 미충전으로 현재 개별 모델 기준 (§4.4).</td></tr>
+  <tr><td class="k">HORIZON vs INSUFFICIENT 차이?</td><td>같은 지각의 두 문턱 — 전자는 달력 초과(계획 문제), 후자는 90일 내 자리 없음(병목 문제). 집계 합산, 진단 분리 (§4.1.5).</td></tr>
+</table></div>
+</section>
+
+<footer>
+  RevPlan 최적화 시뮬레이션 · 기술설계문서 · Celonis · 2026-08 기준 ·
+  컬럼 사전 및 요약본: <a href="https://claude.ai/code/artifact/a61bd5f8-170e-49ea-9aff-a60a9a6992fe">인수인계 문서</a>
+</footer>
+</main>
