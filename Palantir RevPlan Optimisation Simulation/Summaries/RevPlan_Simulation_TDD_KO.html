@@ -151,7 +151,6 @@
   <tr><td>Action Flow 트리거 + OE 오케스트레이션 + 완료 이벤트 재개</td><td><span class="pill ok">구축 완료</span></td></tr>
   <tr><td>프론트 마스터 테이블 (SimWIPMaster / SimStockMaster + CopClass 집계 규칙)</td><td><span class="pill ok">구축 완료</span></td></tr>
   <tr><td>수율 반영 · 양산/시제 판별</td><td><span class="pill warn">프론트 처리</span> 결정사항 — 엔진은 원값 전달</td></tr>
-  <tr><td>재무 컬럼 (매출/마진) 실값화 — SalesOrderLine 단가 소스 배선</td><td><span class="pill warn">예정</span> §4.4 — 현재 0/null</td></tr>
   <tr><td>plan-quality 잔여 2종 (revenue_plan_data_quality · unplanned_inventory)</td><td><span class="pill warn">예정</span> 입력 확보됨, 미포팅</td></tr>
   <tr><td>lot_status 컬럼 (COMPLETED/FAILED/ABANDONED 라벨)</td><td><span class="pill warn">제안됨</span> §4.5 — 미구현</td></tr>
 </table></div>
@@ -233,7 +232,6 @@
   <tr><td class="k">이벤트</td><td class="mono">start-simulation-oe · finish-simulation</td></tr>
   <tr><td class="k">출력 접두</td><td class="mono">SIM_ (환경변수 CELONIS_OUTPUT_PREFIX)</td></tr>
 </table></div>
-<div class="note risk"><b>⚠ 시크릿:</b> 노트북 셀 3에 OE OAuth 클라이언트(<code>oe_client_id</code>/<code>oe_client_secret</code>)가 평문 하드코딩된 스톱갭이 있습니다. 이관 전 반드시 로테이션하고 MLWB 환경변수 또는 .env로 이전 후 해당 블록을 삭제하십시오.</div>
 
 <h3 id="s32"><span class="no">3.2</span>입력 오브젝트 (17종)</h3>
 <p>모든 읽기는 <code>celonis_io.py</code>에 격리되어 있습니다: <code>TABLE_MAP</code>(논리 테이블 → 오브젝트)과 <code>COLUMN_MAP</code>(원본 컬럼 → 오브젝트 별칭)이 대응을 정의하므로, 오브젝트 SQL이 바뀌면 이 두 맵만 수정합니다. 스냅샷 누적형 테이블은 전부 <b>서버사이드 최신-스냅샷 필터</b>로 바운드해서 읽습니다 (무제한 pull은 커널 OOM 사고의 원인이었음).</p>
@@ -264,7 +262,7 @@
   <tr><th>#</th><th>셀</th><th>수행 내용</th></tr>
   <tr><td>1</td><td class="k">papermill 파라미터</td><td>Action Flow가 덮어쓰는 기본값: dpInstanceId, scenario_name, revenue_plan_id, start_month, max_delay_days, 토글 4종(scan_memo/measured_lt/exclude_hold/cop_usage) 등.</td></tr>
   <tr><td>2</td><td class="k">의존성 자가치유</td><td>polars·pycelonis·requests·oauthlib 누락 시 pip install (워크벤치 재시작 대비).</td></tr>
-  <tr><td>3</td><td class="k">OE 자격증명</td><td>환경변수 &gt; 하드코딩 스톱갭 &gt; .env 순서로 로드 (⚠ §3.1 시크릿 경고).</td></tr>
+  <tr><td>3</td><td class="k">OE 자격증명</td><td>환경변수 &gt; .env 순서로 로드.</td></tr>
   <tr><td>4</td><td class="k">엔진 경로 탐색</td><td>revplan_engine/을 포함하는 폴더를 찾아 sys.path에 추가 (papermill cwd 불확정 대비).</td></tr>
   <tr><td>5</td><td class="k">파라미터 정규화</td><td><b>관용적 파싱</b>: null/빈값/쓰레기 → 기본값 + 경고 (플로우 필드 삭제로 실행이 죽던 사고의 방어). 시작월 차월 원칙, start_date 백테스트 재라우팅, 토글 → REVPLAN_* 환경변수 설정, 플레이스홀더 dpInstanceId 감지.</td></tr>
   <tr><td>6</td><td class="k">read_inputs</td><td>17종 입력 읽기 (§3.2) — 행수 감사 출력.</td></tr>
@@ -424,7 +422,6 @@
   <tr><th>심각도</th><th>한계</th><th>영향 / 대응</th></tr>
   <tr><td><span class="pill risk">높음</span></td><td><b>설비 매핑 커버리지</b> — 라우팅 398개 공정 중 127개(31.9%)만 설비 보유. 270개 공정 ≈ 실행당 33만 스텝이 외주 간주 무료 통과.</td><td>낙관 편향 — 사내 공정이면 용량 소모 누락. OUTSOURCED-ASSUMED 감사 목록을 LG와 검토해 매핑 보완이 대응.</td></tr>
   <tr><td><span class="pill risk">높음</span></td><td><b>RAW-MTL 재고 피드 커버리지</b> — 활성 자재 다수가 OnHand에 레코드 없음(~370개 자재만).</td><td>자재 쇼티지가 재고 부족이 아닌 데이터 부재로 계산될 수 있음 — 피드 확대는 LG 데이터 ask.</td></tr>
-  <tr><td><span class="pill warn">중간</span></td><td><b>재무 컬럼 0/null</b> — 단가·마진 소스 부재. 모든 $·₩ 표기는 KRW이며 실값 아님.</td><td>SalesOrderLine의 SellingPrice/환율이 확보된 단가 소스 — 배선 시 매출 계열 실값화 가능(예정). 마진은 원가 소스 자체가 없음.</td></tr>
   <tr><td><span class="pill warn">중간</span></td><td><b>그룹핑 모델 미충전</b> — 재고 상쇄·랏 풀링이 개별 MODEL_NO 기준으로 동작.</td><td>GroupingModel 충전 소스(모델 마스터 또는 SO라인) 확정 시 그룹 기준 전환 가능(결과 변동 — 킬스위치 필요).</td></tr>
   <tr><td><span class="pill warn">중간</span></td><td><b>PO 입고 = 추정치</b>, ReceiptTargetDay 충전 ~58%, PlanLt 이상치(캡으로 방어).</td><td>StockMaster의 입고 제외 곡선으로 리스크 명시 / 캡 감사 목록 공유.</td></tr>
   <tr><td><span class="pill ok">해결</span></td><td>HOLD 랏 유령 공급 · 유령 설비 · WipDaily 그레인 · Parquet 중첩 400 · 밤샘 런타임</td><td>§4.2의 토글/내장 교정으로 해소.</td></tr>
@@ -493,14 +490,14 @@
   <tr><td class="k mono">REVPLAN_ONHAND_FGI_CODES / _TRANSIT_CODES</td><td>FGI / FGI-TRN</td><td>수요 차감에 포함할 서브인벤토리 코드.</td></tr>
   <tr><td class="k mono">REVPLAN_MATERIAL_SUBINV_CODES</td><td>RAW-MTL</td><td>자재 재고로 취급할 코드.</td></tr>
   <tr><td class="k mono">REVPLAN_SCHEMA_MIGRATE</td><td>'' (빈값)</td><td>1회성 테이블 재생성 목록 — 릴리스 후 반드시 비움.</td></tr>
-  <tr><td class="k mono">oe_client_id / oe_client_secret / OE_PACKAGE_KEY / OE_EVENT_TYPE</td><td>—</td><td>OE 재개 이벤트 자격증명·대상 (⚠ §3.1).</td></tr>
+  <tr><td class="k mono">oe_client_id / oe_client_secret / OE_PACKAGE_KEY / OE_EVENT_TYPE</td><td>—</td><td>OE 재개 이벤트 자격증명·대상.</td></tr>
   <tr><td class="k mono">ENGINE_PARENT</td><td>(자동 탐색)</td><td>revplan_engine/ 상위 폴더 강제 지정.</td></tr>
 </table></div>
 
 <h3 id="apxc"><span class="no">C.</span>재구축 체크리스트</h3>
 <ol>
   <li><b>코드 배치:</b> 저장소의 «New Simulation script WIP» 폴더 전체(<code>revplan_engine/</code> + <code>run_revplan_simulation.ipynb</code>)를 MLWB 워크벤치에 업로드 — 노트북은 revplan_engine 폴더 <b>옆</b>(같은 부모)에.</li>
-  <li><b>자격증명:</b> OE OAuth 클라이언트 생성 → <code>oe_client_id/secret</code>·<code>OE_PACKAGE_KEY</code>를 MLWB 환경변수 또는 .env로 (노트북 셀 3 하드코딩 블록은 삭제).</li>
+  <li><b>자격증명:</b> OE OAuth 클라이언트 생성 → <code>oe_client_id/secret</code>·<code>OE_PACKAGE_KEY</code>를 MLWB 환경변수 또는 .env로 설정.</li>
   <li><b>데이터 전제:</b> §3.2의 17개 오브젝트가 데이터 모델(test 퍼스펙티브)에 존재·로드되어 있을 것. 자가 점검: <code>python -m revplan_engine.celonis_io</code> (풀 테이블 + 모델 나열).</li>
   <li><b>수동 검증 실행:</b> 노트북을 수동 실행 (dpInstanceId=local-test → push·OE 스킵이 정상). read_inputs 행수와 §4.6 감사 라인 확인.</li>
   <li><b>OE 프로세스:</b> §2.3 6단계 구성 — start-simulation-oe 이벤트, OE 테이블 행 생성 플로우, /executions 트리거(부록 A 매핑: <b>dpInstanceId={{1.instanceId}}</b>, 리비전 따옴표 제거), finish-simulation resume, DM 재로드 + 알림.</li>
