@@ -1215,6 +1215,34 @@ def run_simulation(params: SimulationParams,
         eng.allocation, inputs.get("sales_order_lines"))
 
     print("=== RevPlan simulation: done ===")
+
+    # --- ⚠️ MLWB ADDITION (2026-09-07, team request): 이동계획(MovePlan) 월 ------
+    # 매출 기준을 이동계획 월로 잡기 위한 컬럼. target_month는 일반 lot에서는 이미
+    # MovePlan YYYYMM이지만, 긴급 lot은 ReceiptTargetDay 월, 이월 VL은 재시도 월을
+    # 담는다. moveplan_yymm은 target_month를 선택된 revision의 실제 (model, month)
+    # 수요에 대해 검증한 값: 이동계획에 실존하는 월이면 채워지고 계획 외 월
+    # (긴급/이월)은 null — 프론트 매출 axis는 이 컬럼을 쓰면 정직하게 이동계획 기준.
+    allocation_out = eng.allocation
+    _rp = inputs.get("revenue_plan")
+    if (allocation_out.height and _rp is not None and getattr(_rp, "height", 0)
+            and "plan_month" in _rp.columns):
+        _mp_months = (_rp.select([
+                pl.col("model_id").cast(pl.Utf8),
+                pl.col("plan_month").cast(pl.Utf8).alias("target_month"),
+            ]).unique()
+            .with_columns(pl.col("target_month").alias("moveplan_yymm")))
+        allocation_out = allocation_out.join(
+            _mp_months, on=["model_id", "target_month"], how="left")
+        _mp_filled = int(allocation_out.select(
+            pl.col("moveplan_yymm").is_not_null().sum()).item())
+        print(f"   ✓ moveplan_yymm: {_mp_filled:,}/{allocation_out.height:,} allocation rows "
+              f"land on a MovePlan month; {allocation_out.height - _mp_filled:,} null "
+              f"(긴급 lot의 ReceiptTargetDay 월 / 이월 VL 재시도 월 — 이동계획 밖)")
+    else:
+        allocation_out = allocation_out.with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias("moveplan_yymm"))
+        print("   ⚠ moveplan_yymm: revenue_plan unavailable — column pushed as null")
+
     # --- ⚠️ MLWB ADDITION (2026-08-05): two frontend master tables ---------------
     # SimWIPMaster  = allocation steps + 1-row-per-lot ACTUAL history (WipHistory).
     #   Join proven in the backend beforehand (SQL check 2026-08-05): lot-level
@@ -1223,7 +1251,7 @@ def run_simulation(params: SimulationParams,
     # SimStockMaster = DAILY PIVOT per (material x date): 사용량/보충량/보유량 +
     #   CopClass (frontend spec 2026-08-05) — the 자재 쇼티지 그래프 backing table;
     #   lot/차수 drill-down stays in SIM_material_consumption_events.
-    wip_master = build_wip_master(eng.allocation, inputs.get("wip_history_lot_summary"),
+    wip_master = build_wip_master(allocation_out, inputs.get("wip_history_lot_summary"),
                                   planned_steps=inputs.get("planned_process_steps"))
     stock_master = build_stock_master(
         material_consumption_events, inputs.get("material_inventories"),
@@ -1231,7 +1259,7 @@ def run_simulation(params: SimulationParams,
         material_classes=inputs.get("material_classes"))
 
     results = {
-        "allocation": eng.allocation,
+        "allocation": allocation_out,
         "WIPMaster": wip_master,
         "StockMaster": stock_master,
         "new_lots_created": eng.new_lots,

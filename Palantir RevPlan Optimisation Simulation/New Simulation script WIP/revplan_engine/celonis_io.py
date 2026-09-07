@@ -2670,10 +2670,14 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 #   Name tables here only while a release actually migrates them (the 차수/chasu
 #   column shipped this way on 2026-07-30) — a permanent allowlist would let a
 #   transient push error silently reset a table's history.
-#   Past one-shots (all landed, list now empty): 'allocation' (2026-08-04
-#   modified_group column), 'StockMaster' (2026-08-07 opening_qty ->
-#   initial_onhand_qty rename; recreate confirmed in the 2026-08-10 run log).
-_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "")
+#   Past one-shots (all landed): 'allocation' (2026-08-04 modified_group column),
+#   'StockMaster' (2026-08-07 opening_qty -> initial_onhand_qty rename; recreate
+#   confirmed in the 2026-08-10 run log).
+#   ACTIVE one-shot (2026-09-07): 'allocation,WIPMaster' — moveplan_yymm column
+#   added for the 이동계획-기준 매출 axis. SIM_allocation + SIM_WIPMaster are
+#   recreated on their first append failure; CLEAR the default back to "" once a
+#   run log confirms both tables recreated with the new column.
+_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation,WIPMaster")
 SCHEMA_MIGRATE_TABLES = frozenset(
     t.strip() for t in _SCHEMA_MIGRATE_RAW.split(",")
     if t.strip() and t.strip().lower() not in ("0", "none", "off")
