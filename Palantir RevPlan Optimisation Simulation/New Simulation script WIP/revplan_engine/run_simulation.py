@@ -497,6 +497,170 @@ def build_wip_master(allocation: pl.DataFrame, lot_summary,
     return out
 
 
+# --- ⚠️ MLWB ADDITION (2026-09-07, team validation request): 투입필요수량 waterfall.
+# 순생산소요 검증용. net_production_demand already computes every bucket per
+# (plan, grouping, month) — it was just never pushed. This table = that frame +
+# two simulated columns joined on (model, month):
+#   wip_supplied_ea       = 기존 WIP lot 완공 예상량 (allocation, is_new_lot=false,
+#                           units_produced>0 — final-step completions only)
+#   new_input_required_ea = 신규 투입 필요량: the engine's OWN answer to "투입
+#                           필요한 수량은?" — the VL target_units it minted for
+#                           that (model, month) after WIP was applied.
+# Plan-anchored LEFT join: rows exist only for planned (model, month) pairs, so
+# the waterfall reads 계획 → −적송 → −출하 → −OnHand → −이월 → 순생산소요 →
+# −WIP산출 → 투입필요. WIP output landing outside planned months (긴급/이월) is
+# counted in the audit print but not rowed here — that's SIM_offplan/allocation's job.
+def build_net_demand_waterfall(net_demand, allocation, new_lots) -> pl.DataFrame:
+    if net_demand is None or getattr(net_demand, "height", 0) == 0:
+        print("   ⚠ net_demand_waterfall: net_demand empty — nothing to push")
+        return pl.DataFrame()
+
+    out = net_demand
+    _join_key = ["model_id", "plan_month"]
+
+    if (allocation is not None and getattr(allocation, "height", 0)
+            and "is_new_lot" in allocation.columns):
+        _wip_sup = (allocation
+                    .filter((~pl.col("is_new_lot").fill_null(False))
+                            & (pl.col("units_produced") > 0))
+                    .group_by(["model_id", "target_month"])
+                    .agg(pl.col("units_produced").cast(pl.Int64).sum()
+                         .alias("wip_supplied_ea"))
+                    .rename({"target_month": "plan_month"}))
+        _wip_total = int(_wip_sup["wip_supplied_ea"].sum() or 0)
+        out = out.join(_wip_sup, on=_join_key, how="left")
+        _wip_matched = int(out.select(pl.col("wip_supplied_ea").fill_null(0).sum()).item())
+        if _wip_total != _wip_matched:
+            print(f"   ⚠ net_demand_waterfall: {_wip_total - _wip_matched:,} EA of WIP "
+                  "output lands outside planned (model, month) pairs (긴급/이월) — "
+                  "not rowed in this plan-anchored table")
+    else:
+        out = out.with_columns(pl.lit(None, dtype=pl.Int64).alias("wip_supplied_ea"))
+
+    if new_lots is not None and getattr(new_lots, "height", 0):
+        _vl = (new_lots.group_by(["model_id", "target_month"])
+               .agg([pl.col("target_units").cast(pl.Int64).sum().alias("new_input_required_ea"),
+                     pl.col("lot_id").n_unique().cast(pl.Int64).alias("new_lot_count")])
+               .rename({"target_month": "plan_month"}))
+        out = out.join(_vl, on=_join_key, how="left")
+    else:
+        out = out.with_columns([pl.lit(None, dtype=pl.Int64).alias("new_input_required_ea"),
+                                pl.lit(None, dtype=pl.Int64).alias("new_lot_count")])
+
+    out = out.with_columns([
+        pl.col("wip_supplied_ea").fill_null(0),
+        pl.col("new_input_required_ea").fill_null(0),
+        pl.col("new_lot_count").fill_null(0),
+    ])
+
+    _run_id, _sim_id = None, None
+    if allocation is not None and getattr(allocation, "height", 0):
+        if "allocation_run_id" in allocation.columns:
+            _run_id = allocation["allocation_run_id"][0]
+        if "simulation_id" in allocation.columns:
+            _sim_id = allocation["simulation_id"][0]
+    out = out.with_columns([pl.lit(_sim_id, dtype=pl.Utf8).alias("simulation_id"),
+                            pl.lit(_run_id, dtype=pl.Utf8).alias("allocation_run_id")])
+
+    print(f"   ✓ net_demand_waterfall: {out.height:,} (model, month) rows — 계획 "
+          f"{int(out['planned_demand_ea'].sum() or 0):,} EA → 순생산소요 "
+          f"{int(out['net_production_demand_ea'].sum() or 0):,} EA → WIP산출 "
+          f"{int(out['wip_supplied_ea'].sum() or 0):,} EA → 투입필요 "
+          f"{int(out['new_input_required_ea'].sum() or 0):,} EA")
+    return out
+
+
+# --- ⚠️ MLWB ADDITION (2026-09-07, team request 셋째): 계획 외 판매가능 재원 ----
+# Models absent from the selected MovePlan revision are dropped by the netting
+# LEFT join and never enter allocation (no demand → never picked), so their
+# stock/WIP is invisible in every output today. This table surfaces them for the
+# M+UP 재원 proposal: FGI on-hand + FGI-TRN 적송 (from available_inventory) +
+# current WIP position (from wip_lots), per model. shipped is informational
+# (이미 출하 — sold without a plan) and EXCLUDED from sellable_total_ea.
+_OFFPLAN_SCHEMA = {
+    "model_id": pl.Utf8, "onhand_ea": pl.Float64, "transit_ea": pl.Float64,
+    "shipped_this_month_ea": pl.Float64, "wip_lot_count": pl.Int64,
+    "wip_unit_qty_ea": pl.Float64, "sellable_total_ea": pl.Float64,
+    "simulation_id": pl.Utf8, "revenue_plan_id": pl.Utf8, "allocation_run_id": pl.Utf8,
+}
+
+
+def build_offplan_inventory(available_inventory, revenue_plan, wip_lots,
+                            allocation) -> pl.DataFrame:
+    # Guard mirrors uncommitted_demand: an empty/broken plan read must not label
+    # EVERY model as off-plan.
+    if revenue_plan is None or getattr(revenue_plan, "height", 0) == 0:
+        print("   ⚠ offplan_inventory: revenue_plan empty — skipped (would mark "
+              "every model off-plan)")
+        return pl.DataFrame(schema=_OFFPLAN_SCHEMA)
+    _plan_models = set(revenue_plan.filter(pl.col("model_id").is_not_null())
+                       ["model_id"].cast(pl.Utf8).unique().to_list())
+
+    parts = []
+    if available_inventory is not None and getattr(available_inventory, "height", 0):
+        # transit is not a stored column — re-derive as total − shipped − onhand,
+        # the same identity net_production_demand uses.
+        parts.append(
+            available_inventory.group_by("model_id").agg([
+                pl.col("onhand_quantity_ea").fill_null(0.0).sum().alias("onhand_ea"),
+                pl.col("shipped_quantity_ea").fill_null(0.0).sum().alias("shipped_this_month_ea"),
+                pl.col("total_inventory_ea").fill_null(0.0).sum().alias("_total_ea"),
+            ]).with_columns(
+                (pl.col("_total_ea") - pl.col("shipped_this_month_ea")
+                 - pl.col("onhand_ea")).clip(lower_bound=0.0).alias("transit_ea")
+            ).drop("_total_ea"))
+    if wip_lots is not None and getattr(wip_lots, "height", 0):
+        parts.append(
+            wip_lots.filter(pl.col("model_id").is_not_null())
+            .group_by("model_id").agg([
+                pl.col("lot_id").n_unique().cast(pl.Int64).alias("wip_lot_count"),
+                pl.col("latest_unit_quantity").fill_null(0.0).sum().alias("wip_unit_qty_ea"),
+            ]))
+    if not parts:
+        print("   ⚠ offplan_inventory: no inventory or WIP input readable — empty")
+        return pl.DataFrame(schema=_OFFPLAN_SCHEMA)
+
+    out = parts[0]
+    for p in parts[1:]:
+        out = out.join(p, on="model_id", how="full", coalesce=True)
+    for c, dt in _OFFPLAN_SCHEMA.items():
+        if c not in out.columns:
+            out = out.with_columns(pl.lit(None, dtype=dt).alias(c))
+    out = out.with_columns([
+        pl.col(c).fill_null(0.0) for c in
+        ("onhand_ea", "transit_ea", "shipped_this_month_ea", "wip_unit_qty_ea")
+    ]).with_columns(pl.col("wip_lot_count").fill_null(0))
+
+    _all = out.height
+    out = out.filter(~pl.col("model_id").is_in(list(_plan_models)))
+    out = out.with_columns(
+        (pl.col("onhand_ea") + pl.col("transit_ea") + pl.col("wip_unit_qty_ea"))
+        .alias("sellable_total_ea")
+    ).filter(pl.col("sellable_total_ea") > 0)
+
+    _run_id, _sim_id, _rp_id = None, None, None
+    if allocation is not None and getattr(allocation, "height", 0):
+        if "allocation_run_id" in allocation.columns:
+            _run_id = allocation["allocation_run_id"][0]
+        if "simulation_id" in allocation.columns:
+            _sim_id = allocation["simulation_id"][0]
+    if "revenue_plan_id" in revenue_plan.columns and revenue_plan.height:
+        _rp_id = revenue_plan["revenue_plan_id"][0]
+    out = out.with_columns([
+        pl.lit(_sim_id, dtype=pl.Utf8).alias("simulation_id"),
+        pl.lit(_rp_id, dtype=pl.Utf8).alias("revenue_plan_id"),
+        pl.lit(_run_id, dtype=pl.Utf8).alias("allocation_run_id"),
+    ]).select(list(_OFFPLAN_SCHEMA.keys())).sort("sellable_total_ea", descending=True)
+
+    print(f"   ✓ offplan_inventory: {out.height:,} of {_all:,} stocked/WIP models are "
+          f"OUTSIDE the selected revision ({len(_plan_models):,} planned models) — "
+          f"판매가능 {float(out['sellable_total_ea'].sum() or 0):,.0f} EA "
+          f"(onhand {float(out['onhand_ea'].sum() or 0):,.0f} + transit "
+          f"{float(out['transit_ea'].sum() or 0):,.0f} + WIP "
+          f"{float(out['wip_unit_qty_ea'].sum() or 0):,.0f})")
+    return out
+
+
 def _cop_usage_enabled() -> bool:
     # ⚠️ MLWB ADDITION (2026-08-11, customer/Aria rule). Engine default OFF; the
     # notebook param `cop_usage` turns it ON for triggered runs (measured_lt pattern).
@@ -1214,6 +1378,15 @@ def run_simulation(params: SimulationParams,
     uncommitted_by_model, uncommitted_by_lot = compute_uncommitted_demand(
         eng.allocation, inputs.get("sales_order_lines"))
 
+    # --- Tier 8 (2026-09-07, team validation request) --------------------------
+    #   waterfall: 계획 → 재원 버킷 차감 → 순생산소요 → WIP산출 → 투입필요수량
+    #   offplan:   계획 외 모델의 판매가능 재원 (M+UP 제안용)
+    net_demand_waterfall = build_net_demand_waterfall(
+        net_demand, eng.allocation, eng.new_lots)
+    offplan_inventory = build_offplan_inventory(
+        inputs.get("available_inventory"), inputs.get("revenue_plan"),
+        inputs.get("wip_lots"), eng.allocation)
+
     print("=== RevPlan simulation: done ===")
 
     # --- ⚠️ MLWB ADDITION (2026-09-07, team request): 이동계획(MovePlan) 월 ------
@@ -1281,6 +1454,9 @@ def run_simulation(params: SimulationParams,
         # committed vs uncommitted demand (ported 2026-08-26, o_custom_SalesOrderLine):
         "uncommitted_demand_by_model": uncommitted_by_model,
         "uncommitted_demand_by_lot": uncommitted_by_lot,
+        # 순생산소요 검증 (team request 2026-09-07): waterfall + 계획 외 판매가능 재원
+        "net_demand_waterfall": net_demand_waterfall,
+        "offplan_inventory": offplan_inventory,
     }
 
     # --- Stamp organization_code onto every output keyed by model_id --------------
