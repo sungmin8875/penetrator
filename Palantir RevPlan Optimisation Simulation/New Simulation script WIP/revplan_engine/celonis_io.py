@@ -223,11 +223,6 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "YYYYMM":      "YYYYMM",
         "PLAN_QTY":    "PlanQty",
         "PLAN_AMT":    "PlanAmt",
-        # ✅ 2026-09-09 — LG added to the object: PK1_MODEL.ATTRIBUTE4 joined on
-        # (org, model). Read ONLY by read_grouping_model_map (stage-1 analysis
-        # axis); read_revenue_plan deliberately does NOT pull it — see the
-        # warning there.
-        "GROUPING_MODEL": "GroupingModel",
     },
     "PK1_MODEL": {
         "MODEL_NO":          "ModelNo",
@@ -693,55 +688,8 @@ def read_revenue_plan(params) -> pl.DataFrame:
         except Exception:  # noqa: BLE001
             df = df.with_columns(pl.lit(None).alias("sales_team"))
     # ❌ margin_krw: no cost/margin column anywhere in PPS/RTS -> null.
-    # ⚠️ grouping_model: o_custom_MovePlan DOES carry GroupingModel since 2026-09-09,
-    # but this read keeps it NULL ON PURPOSE (stage 1). Populating it here would
-    # flip the netting join and the demand keys to group grain while
-    # available_inventory stays model-keyed — the keys stop matching (net demand
-    # inflates) and demand lands on group ids without routings (unrouted). That
-    # grain switch is stage 2 and needs LG's 3 business rules (대표 모델 선정 /
-    # 공정 기준 / 신규 lot 귀속) first. The analysis-axis mapping is read
-    # separately by read_grouping_model_map and stamped onto OUTPUTS only.
+    # ⚠️ grouping_model / revenue_type: not in PK1_MPLAN -> null (engine tolerates).
     return _add_missing(df, ["margin_krw", "grouping_model", "sales_team", "revenue_type"])
-
-
-# ---- ✅ grouping_model_map  <-  PK1_MPLAN.GroupingModel (stage 1, 2026-09-09) --
-def read_grouping_model_map(params) -> pl.DataFrame:
-    """model_id -> grouping_model, from the MovePlan object's GroupingModel column
-    (= PK1_MODEL.ATTRIBUTE4, joined into the object by LG on 2026-09-09).
-
-    ⚠️ MLWB ADDITION — stage-1 analysis axis ONLY: run_simulation stamps this onto
-    output tables that already carry a grouping_model column, so 재원/매출/부족
-    aggregations can group by it in the frontend. It never enters the netting or
-    allocation engine (numbers unchanged) — that is stage 2, gated on business rules.
-    """
-    _schema = {"model_id": pl.Utf8, "grouping_model": pl.Utf8}
-    try:
-        df = _pull("PK1_MPLAN", {"model_id": "MODEL_NO",
-                                 "grouping_model": "GROUPING_MODEL"}, distinct=True)
-    except Exception as ex:  # noqa: BLE001 — older data model without the column
-        print(f"   ⚠ grouping_model_map: GroupingModel not readable from o_custom_MovePlan "
-              f"({type(ex).__name__}) — grouping analysis axis stays null this run "
-              "(has the data model been reloaded since the column was added?)")
-        return pl.DataFrame(schema=_schema)
-
-    df = (df.with_columns([
-            pl.col("model_id").cast(pl.Utf8).str.strip_chars(),
-            pl.col("grouping_model").cast(pl.Utf8).str.strip_chars(),
-          ])
-          .filter(pl.col("model_id").is_not_null() & (pl.col("model_id") != "")
-                  & pl.col("grouping_model").is_not_null() & (pl.col("grouping_model") != ""))
-          .unique())
-    # One grouping per model expected (ATTRIBUTE4 is on the model master). If the
-    # join ever fans out (e.g. org-code collisions), keep one deterministically and
-    # say so — a silent random pick would make the analysis axis unstable across runs.
-    _conflicts = (df.group_by("model_id").len().filter(pl.col("len") > 1))
-    if _conflicts.height:
-        print(f"   ⚠ grouping_model_map: {_conflicts.height} models carry >1 GroupingModel "
-              "value — keeping the lexicographic first per model (ask LG which is right)")
-    out = df.sort(["model_id", "grouping_model"]).unique(subset=["model_id"], keep="first")
-    print(f"   ✓ grouping_model_map: {out.height:,} models mapped to "
-          f"{out['grouping_model'].n_unique():,} grouping models (MovePlan.GroupingModel)")
-    return out.select(list(_schema.keys()))
 
 
 def _shipped_quantities(start_month: Optional[str]) -> Optional[pl.DataFrame]:
@@ -2692,7 +2640,6 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
         "wip_history_lot_summary":   read_wip_history_lot_summary(params),   # ✅ 2026-08-19 — o_custom_WIP newest-hour lot actuals (same cached pull)
         "material_classes":          read_material_classes(params),          # ✅ 2026-08-05 — CopClass per material (SimStockMaster)
         "sales_order_lines":         read_sales_order_lines(params),         # ✅ 2026-08-26 — o_custom_SalesOrderLine (uncommitted demand)
-        "grouping_model_map":        read_grouping_model_map(params),        # ✅ 2026-09-09 — MovePlan.GroupingModel (stage-1 analysis axis, outputs only)
     }
     # NOTE — remaining stub-analysis inputs: production_risk_reconciliation needs no
     # new sources (it reads other analyses' outputs) — port it alongside its stub.
@@ -2730,11 +2677,7 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 #   added for the 이동계획-기준 매출 axis. SIM_allocation + SIM_WIPMaster are
 #   recreated on their first append failure; CLEAR the default back to "" once a
 #   run log confirms both tables recreated with the new column.
-#   'offplan_inventory' (2026-09-09): grouping_model column added before most
-#   deployments ever created the table — covers the edge where a run already
-#   created it without the column.
-_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE",
-                                     "allocation,WIPMaster,offplan_inventory")
+_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation,WIPMaster")
 SCHEMA_MIGRATE_TABLES = frozenset(
     t.strip() for t in _SCHEMA_MIGRATE_RAW.split(",")
     if t.strip() and t.strip().lower() not in ("0", "none", "off")
