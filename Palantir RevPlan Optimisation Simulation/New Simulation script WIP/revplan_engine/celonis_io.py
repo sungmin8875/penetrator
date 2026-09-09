@@ -223,6 +223,7 @@ COLUMN_MAP: Dict[str, Dict[str, str]] = {
         "YYYYMM":      "YYYYMM",
         "PLAN_QTY":    "PlanQty",
         "PLAN_AMT":    "PlanAmt",
+        "GROUPING_MODEL": "GroupingModel",
     },
     "PK1_MODEL": {
         "MODEL_NO":          "ModelNo",
@@ -628,6 +629,12 @@ def read_revenue_plan(params) -> pl.DataFrame:
         "plan_month":      "YYYYMM",
         "quantity_ea":     "PLAN_QTY",
         "amount_krw":      "PLAN_AMT",     # ✅ customer confirmed 2026-07-30: value used AS IS (plain KRW — no 백만원 scaling; PK1_MPLAN has no currency col)
+        # ⚠️ MLWB ADDITION (2026-09-09): 이동계획 그룹핑 모델. DELIBERATELY read under a
+        # DIFFERENT name than `grouping_model` — net_production_demand keys its group_by on
+        # `grouping_model`, so filling that name would change the netting grain (and the
+        # representative model_id it picks via .first()). Kept separate so run_simulation can
+        # stamp it onto the allocation output while Net Demand stays model_id-grained.
+        "moveplan_grouping_model": "GROUPING_MODEL",
     })
     if df.height:
         df = df.with_columns([
@@ -2673,11 +2680,18 @@ def read_inputs(params) -> Dict[str, pl.DataFrame]:
 #   Past one-shots (all landed): 'allocation' (2026-08-04 modified_group column),
 #   'StockMaster' (2026-08-07 opening_qty -> initial_onhand_qty rename; recreate
 #   confirmed in the 2026-08-10 run log).
-#   ACTIVE one-shot (2026-09-07): 'allocation,WIPMaster' — moveplan_yymm column
-#   added for the 이동계획-기준 매출 axis. SIM_allocation + SIM_WIPMaster are
-#   recreated on their first append failure; CLEAR the default back to "" once a
-#   run log confirms both tables recreated with the new column.
-_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "allocation,WIPMaster")
+#   Past one-shot (LANDED 2026-09-07 → 2026-09-09): 'allocation,WIPMaster' —
+#   moveplan_yymm / grouping_model / target_month_source 컬럼 추가. 2026-09-09 실행
+#   로그에서 두 테이블이 새 스키마로 recreated 된 것을 확인했으므로 기본값을 ""로
+#   되돌렸다.
+# ⚠️ 2026-09-09 결정 (Jiho): 모든 SIM_* 테이블의 실행 이력은 무조건 보존되어야 한다.
+#   그래서 기본값은 반드시 "" 로 유지한다. 여기에 테이블 이름을 넣는 것은 그 테이블의
+#   과거 실행을 전부 버리는 행위이므로, 스키마를 실제로 바꾸는 릴리즈에서 딱 한 번만
+#   넣고 확인 후 즉시 ""로 되돌린다. 상시 등재는 금지.
+#   (2026-09-09 실측: 이 값이 'allocation,WIPMaster'인 동안 SIM_allocation /
+#    SIM_WIPMaster에 SimulationId가 1개만 남았고, 다른 19개 테이블은 46~47개로
+#    정상 누적되어 있었다 — 즉 이 값이 유일한 이력 소실 원인이었다.)
+_SCHEMA_MIGRATE_RAW = os.environ.get("REVPLAN_SCHEMA_MIGRATE", "")
 SCHEMA_MIGRATE_TABLES = frozenset(
     t.strip() for t in _SCHEMA_MIGRATE_RAW.split(",")
     if t.strip() and t.strip().lower() not in ("0", "none", "off")
@@ -2704,10 +2718,18 @@ def write_outputs(results: Dict[str, pl.DataFrame], params) -> None:
         return
 
     p = pool()
-    reset = bool(os.environ.get("CELONIS_OUTPUT_RESET"))
+    # ⚠️ MLWB FIX (2026-09-09): 이전에는 bool(os.environ.get(...)) 이었다. 그러면
+    #    CELONIS_OUTPUT_RESET="0" / "false" / "no" 처럼 "껐다고 생각한" 값도 빈 문자열이
+    #    아니므로 True가 되어 21개 SIM_* 테이블 전부를 삭제·재생성해 버린다. 이력 보존이
+    #    절대 요건이므로(2026-09-09 결정) 명시적으로 참인 값만 reset으로 인정한다.
+    _reset_raw = str(os.environ.get("CELONIS_OUTPUT_RESET", "")).strip().lower()
+    reset = _reset_raw in ("1", "true", "t", "yes", "y", "on")
+    if _reset_raw and not reset:
+        print(f"   ℹ CELONIS_OUTPUT_RESET={_reset_raw!r} — 참이 아닌 값이므로 reset OFF "
+              "(이력 유지). 실제로 전체 초기화하려면 '1'을 주십시오.")
     if reset:
-        print("   ⚠ CELONIS_OUTPUT_RESET=1 — dropping + recreating SIM_* tables "
-              "(previous runs' rows are DISCARDED)")
+        print("   ⚠ CELONIS_OUTPUT_RESET=1 — dropping + recreating ALL SIM_* tables "
+              "(previous runs' rows are DISCARDED — 21개 테이블 전부)")
 
     def _string_column_config(frame):
         """Size each STRING column for the table CREATE (min 256, cap 4000, 2× the
