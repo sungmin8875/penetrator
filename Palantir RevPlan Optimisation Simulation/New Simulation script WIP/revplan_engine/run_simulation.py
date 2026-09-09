@@ -578,7 +578,8 @@ def build_net_demand_waterfall(net_demand, allocation, new_lots) -> pl.DataFrame
 # current WIP position (from wip_lots), per model. shipped is informational
 # (이미 출하 — sold without a plan) and EXCLUDED from sellable_total_ea.
 _OFFPLAN_SCHEMA = {
-    "model_id": pl.Utf8, "onhand_ea": pl.Float64, "transit_ea": pl.Float64,
+    "model_id": pl.Utf8, "grouping_model": pl.Utf8,
+    "onhand_ea": pl.Float64, "transit_ea": pl.Float64,
     "shipped_this_month_ea": pl.Float64, "wip_lot_count": pl.Int64,
     "wip_unit_qty_ea": pl.Float64, "sellable_total_ea": pl.Float64,
     "simulation_id": pl.Utf8, "revenue_plan_id": pl.Utf8, "allocation_run_id": pl.Utf8,
@@ -1477,6 +1478,32 @@ def run_simulation(params: SimulationParams,
             return df.join(_org_lookup, on="model_id", how="left")
 
         results = {name: _with_org(df) for name, df in results.items()}
+
+    # --- ⚠️ MLWB ADDITION (2026-09-09, stage 1): grouping_model analysis axis ----
+    # MovePlan.GroupingModel (= PK1_MODEL.ATTRIBUTE4) stamped onto outputs so the
+    # frontend can aggregate 재원/매출/부족 by 그룹핑 모델. ONLY fills columns that
+    # already exist (allocation family, net_demand-derived, offplan) — never adds
+    # a grouping_model column to a table that lacks one, so no schema drift on
+    # existing SIM_ tables and no engine-number changes. Unmapped models stay null
+    # (frontend COALESCEs to model_id if it wants the netting-equivalent view).
+    _gmap = inputs.get("grouping_model_map")
+    if _gmap is not None and getattr(_gmap, "height", 0):
+        _gmap_j = _gmap.select(["model_id", "grouping_model"]).unique(subset=["model_id"])
+
+        def _with_grouping(df):
+            if (df is None or df.height == 0 or "model_id" not in df.columns
+                    or "grouping_model" not in df.columns):
+                return df
+            return (df.drop("grouping_model")
+                      .join(_gmap_j, on="model_id", how="left"))
+
+        results = {name: _with_grouping(df) for name, df in results.items()}
+        _alloc = results.get("allocation")
+        if _alloc is not None and _alloc.height:
+            _g_filled = int(_alloc.select(
+                pl.col("grouping_model").is_not_null().sum()).item())
+            print(f"   ✓ grouping_model axis: stamped from MovePlan.GroupingModel — "
+                  f"{_g_filled:,}/{_alloc.height:,} allocation rows mapped")
     return results
 
 
